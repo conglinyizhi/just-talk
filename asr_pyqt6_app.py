@@ -7,10 +7,12 @@ import math
 import os
 import queue
 import re
+import shutil
 import socket
 import ssl
 import struct
 import sys
+import subprocess
 import threading
 import time
 import uuid
@@ -27,7 +29,7 @@ def _resolve_log_path() -> str:
         base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
         base = os.path.join(base, "just-talk")
     else:
-        base = os.path.join(os.path.expanduser("~"), ".just-talk")
+        base = os.path.join(os.path.expanduser("~"), ".config", "JustTalk")
     return os.path.join(base, "logs", "app.log")
 
 
@@ -1165,6 +1167,14 @@ class AsrController(QtCore.QObject):
     appIdChanged = QtCore.pyqtSignal()
     accessTokenChanged = QtCore.pyqtSignal()
     useGzipChanged = QtCore.pyqtSignal()
+    startMinimizedChanged = QtCore.pyqtSignal()
+    autoSubmitChanged = QtCore.pyqtSignal()
+    autoSubmitModeChanged = QtCore.pyqtSignal()
+    autoSubmitPasteKeysChanged = QtCore.pyqtSignal()
+    autoSubmitStatusChanged = QtCore.pyqtSignal()
+    enablePuncChanged = QtCore.pyqtSignal()
+    enableDdcChanged = QtCore.pyqtSignal()
+    hotwordsChanged = QtCore.pyqtSignal()
     hotkeysEnabledChanged = QtCore.pyqtSignal()
     mouseModeEnabledChanged = QtCore.pyqtSignal()
     primaryHotkeyTextChanged = QtCore.pyqtSignal()
@@ -1236,6 +1246,24 @@ class AsrController(QtCore.QObject):
         self._mode = "nostream"
         self._app_id = self.DEFAULT_APP_ID
         self._access_token = self.DEFAULT_ACCESS_TOKEN
+        self._start_minimized = False
+        self._auto_submit = False
+        self._auto_submit_mode = "type"
+        self._auto_submit_status = ""
+        self._auto_submit_stream_last = ""
+        self._auto_submit_stream_sent_text = ""
+        self._auto_submit_stream_pending = ""
+        self._auto_submit_stream_timer = QtCore.QTimer(self)
+        self._auto_submit_stream_timer.setSingleShot(True)
+        self._auto_submit_stream_timer.setInterval(0)
+        self._auto_submit_stream_timer.timeout.connect(self._flush_auto_submit_stream)
+        self._auto_submit_queue: "queue.Queue[Tuple[List[str], str]]" = queue.Queue()
+        self._auto_submit_worker: Optional[threading.Thread] = None
+        self._auto_submit_worker_lock = threading.Lock()
+        self._auto_submit_paste_keys = "ctrl+v"
+        self._enable_punc = True
+        self._enable_ddc = False
+        self._hotwords = ""
         self._status_text = "未连接"
         self._hotkeys_enabled = True
         self._mouse_mode_enabled = True
@@ -1252,6 +1280,12 @@ class AsrController(QtCore.QObject):
         self._is_linux = sys.platform.startswith("linux")
         self._is_windows = sys.platform.startswith("win")
         self._is_mac = sys.platform == "darwin"
+        if self._is_mac:
+            self._auto_submit_paste_keys = "cmd+v"
+        self._xdotool_path = shutil.which("xdotool") if self._is_linux else None
+        self._wtype_path = shutil.which("wtype") if self._is_linux else None
+        self._session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
+        self._is_wayland = self._session_type == "wayland"
 
         self._session_started_at: Optional[float] = None
         self._session_elapsed_s = 0.0
@@ -1267,7 +1301,9 @@ class AsrController(QtCore.QObject):
         self._stats_timer.timeout.connect(self._update_stats)
         self._capture_target: Optional[str] = None
         self._indicator_mode: str = "hold"
+        self._session_mode: Optional[str] = None
         self._hotkeys_suspend_count = 0
+        self._escape_listener: Optional[object] = None
 
         try:
             from recording_indicator import RecordingIndicatorManager
@@ -1301,6 +1337,8 @@ class AsrController(QtCore.QObject):
             self._sync_hotkey_config(None)
 
         self._load_connection_config()
+        self._load_personalization_config()
+        self._refresh_auto_submit_status()
         self._load_stats()
         self._update_status_text()
         self._update_stats()
@@ -1322,6 +1360,7 @@ class AsrController(QtCore.QObject):
             self._mode = value
             self.modeChanged.emit()
             self._update_tutorial_texts()
+            self._save_connection_config()
 
     @QtCore.pyqtProperty(str, notify=appIdChanged)
     def appId(self) -> str:  # noqa: N802
@@ -1355,6 +1394,102 @@ class AsrController(QtCore.QObject):
             self._use_gzip = value
             self.useGzipChanged.emit()
             self._save_connection_config()
+
+    @QtCore.pyqtProperty(bool, notify=autoSubmitChanged)
+    def autoSubmit(self) -> bool:  # noqa: N802
+        return self._auto_submit
+
+    @autoSubmit.setter
+    def autoSubmit(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._auto_submit:
+            self._auto_submit = value
+            self.autoSubmitChanged.emit()
+            self._save_personalization_config()
+            self._refresh_auto_submit_status()
+
+    @QtCore.pyqtProperty(str, notify=autoSubmitModeChanged)
+    def autoSubmitMode(self) -> str:  # noqa: N802
+        return self._auto_submit_mode
+
+    @autoSubmitMode.setter
+    def autoSubmitMode(self, value: str) -> None:
+        value = (value or "").strip().lower()
+        if value == "auto":
+            value = "type"
+        if value not in ("type", "paste"):
+            return
+        if value != self._auto_submit_mode:
+            self._auto_submit_mode = value
+            self.autoSubmitModeChanged.emit()
+            self._save_personalization_config()
+            self._refresh_auto_submit_status()
+
+    @QtCore.pyqtProperty(str, notify=autoSubmitPasteKeysChanged)
+    def autoSubmitPasteKeys(self) -> str:  # noqa: N802
+        return self._auto_submit_paste_keys
+
+    @autoSubmitPasteKeys.setter
+    def autoSubmitPasteKeys(self, value: str) -> None:
+        value = (value or "").strip()
+        if not value:
+            value = self._default_paste_keys()
+        if value != self._auto_submit_paste_keys:
+            self._auto_submit_paste_keys = value
+            self.autoSubmitPasteKeysChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(str, notify=autoSubmitStatusChanged)
+    def autoSubmitStatus(self) -> str:  # noqa: N802
+        return self._auto_submit_status
+
+    @QtCore.pyqtProperty(bool, notify=startMinimizedChanged)
+    def startMinimized(self) -> bool:  # noqa: N802
+        return self._start_minimized
+
+    @startMinimized.setter
+    def startMinimized(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._start_minimized:
+            self._start_minimized = value
+            self.startMinimizedChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(bool, notify=enablePuncChanged)
+    def enablePunc(self) -> bool:  # noqa: N802
+        return self._enable_punc
+
+    @enablePunc.setter
+    def enablePunc(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._enable_punc:
+            self._enable_punc = value
+            self.enablePuncChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(bool, notify=enableDdcChanged)
+    def enableDdc(self) -> bool:  # noqa: N802
+        return self._enable_ddc
+
+    @enableDdc.setter
+    def enableDdc(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._enable_ddc:
+            self._enable_ddc = value
+            self.enableDdcChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(str, notify=hotwordsChanged)
+    def hotwords(self) -> str:  # noqa: N802
+        return self._hotwords
+
+    @hotwords.setter
+    def hotwords(self, value: str) -> None:
+        value = value or ""
+        if value != self._hotwords:
+            self._hotwords = value
+            self.hotwordsChanged.emit()
+            self._save_personalization_config()
 
     @QtCore.pyqtProperty(bool, notify=hotkeysEnabledChanged)
     def hotkeysEnabled(self) -> bool:  # noqa: N802
@@ -1528,6 +1663,7 @@ class AsrController(QtCore.QObject):
             self._indicator_mode = indicator_mode
         else:
             self._indicator_mode = self._primary_hotkey_mode
+        self._session_mode = self._indicator_mode
 
         if not self._connected:
             # 先显示连接中指示器(三个点)
@@ -2026,6 +2162,7 @@ class AsrController(QtCore.QObject):
         app_id = settings.value("Connection/app_id", self._app_id)
         access_token = settings.value("Connection/access_token", self._access_token)
         use_gzip = settings.value("Connection/use_gzip", self._use_gzip)
+        saved_mode = settings.value("Connection/mode", self._mode)
         if app_id is not None:
             self._app_id = str(app_id)
         if access_token is not None:
@@ -2034,12 +2171,63 @@ class AsrController(QtCore.QObject):
             self._use_gzip = use_gzip.strip().lower() in ("1", "true", "yes", "on")
         else:
             self._use_gzip = bool(use_gzip)
+        if saved_mode is not None:
+            mode = str(saved_mode).strip().lower()
+            if mode in ("nostream", "bidi", "bidi_async"):
+                self._mode = mode
 
     def _save_connection_config(self) -> None:
         settings = QtCore.QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
         settings.setValue("Connection/app_id", self._app_id)
         settings.setValue("Connection/access_token", self._access_token)
         settings.setValue("Connection/use_gzip", self._use_gzip)
+        settings.setValue("Connection/mode", self._mode)
+        settings.sync()
+
+    def _load_personalization_config(self) -> None:
+        settings = QtCore.QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
+        start_minimized = settings.value("Personalization/start_minimized", self._start_minimized)
+        auto_submit = settings.value("Personalization/auto_submit", self._auto_submit)
+        auto_submit_mode = settings.value("Personalization/auto_submit_mode", self._auto_submit_mode)
+        auto_submit_paste_keys = settings.value(
+            "Personalization/auto_submit_paste_keys",
+            self._auto_submit_paste_keys,
+        )
+        enable_punc = settings.value("Personalization/enable_punc", self._enable_punc)
+        enable_ddc = settings.value("Personalization/enable_ddc", self._enable_ddc)
+        hotwords = settings.value("Personalization/hotwords", self._hotwords)
+
+        def coerce_bool(value: object) -> bool:
+            if isinstance(value, str):
+                return value.strip().lower() in ("1", "true", "yes", "on")
+            return bool(value)
+
+        self._start_minimized = coerce_bool(start_minimized)
+        self._auto_submit = coerce_bool(auto_submit)
+        if auto_submit_mode is not None:
+            mode = str(auto_submit_mode).strip().lower()
+            if mode == "auto":
+                mode = "type"
+            if mode in ("type", "paste"):
+                self._auto_submit_mode = mode
+        if auto_submit_paste_keys is not None:
+            value = str(auto_submit_paste_keys).strip()
+            if value:
+                self._auto_submit_paste_keys = value
+        self._enable_punc = coerce_bool(enable_punc)
+        self._enable_ddc = coerce_bool(enable_ddc)
+        if hotwords is not None:
+            self._hotwords = str(hotwords)
+
+    def _save_personalization_config(self) -> None:
+        settings = QtCore.QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
+        settings.setValue("Personalization/start_minimized", self._start_minimized)
+        settings.setValue("Personalization/auto_submit", self._auto_submit)
+        settings.setValue("Personalization/auto_submit_mode", self._auto_submit_mode)
+        settings.setValue("Personalization/auto_submit_paste_keys", self._auto_submit_paste_keys)
+        settings.setValue("Personalization/enable_punc", self._enable_punc)
+        settings.setValue("Personalization/enable_ddc", self._enable_ddc)
+        settings.setValue("Personalization/hotwords", self._hotwords)
         settings.sync()
 
     def _using_default_credentials(self) -> bool:
@@ -2121,6 +2309,10 @@ class AsrController(QtCore.QObject):
 
     def _begin_new_session(self) -> None:
         self._reset_session()
+        if self._indicator_mode in ("hold", "toggle"):
+            self._session_mode = self._indicator_mode
+        else:
+            self._session_mode = self._primary_hotkey_mode
         self._stats_last_speed = 0
         self._audio_sent = False  # 重置音频发送标志
         self._current_row = self._history_model.add_item(self._now_label(), "", True)
@@ -2128,9 +2320,17 @@ class AsrController(QtCore.QObject):
         self._update_stats()
         if self._current_row is not None:
             self._emit_history_insert(self._current_row)
+        self._start_escape_listener()
 
     def _reset_session(self) -> None:
         self._stop_default_limit_timer()
+        self._stop_escape_listener()
+        self._session_mode = None
+        self._auto_submit_stream_last = ""
+        self._auto_submit_stream_sent_text = ""
+        self._auto_submit_stream_pending = ""
+        if self._auto_submit_stream_timer.isActive():
+            self._auto_submit_stream_timer.stop()
         self._committed_text = ""
         self._session_partial = ""
         self._last_committed_end_time = -1
@@ -2168,12 +2368,26 @@ class AsrController(QtCore.QObject):
             if not cancelled:
                 clipboard = QtWidgets.QApplication.clipboard()
                 clipboard.setText(content)
+                if (
+                    self._auto_submit
+                    and self._session_mode == "toggle"
+                    and not self._user_cancelled
+                    and content
+                ):
+                    LOG.info(
+                        "AUTO_SUBMIT candidate mode=toggle session_mode=%s text_len=%d cancelled=%s",
+                        self._session_mode,
+                        len(content),
+                        self._user_cancelled,
+                    )
+                    self._auto_submit_text(content, immediate=False)
         self._current_row = None
         self._stats_timer.stop()
         self._committed_text = ""
         self._session_partial = ""
         self._session_elapsed_s = 0.0
         self._session_started_at = None
+        self._stop_escape_listener()
         self._update_stats()
         self._hide_indicator()
         self._hide_indicator()
@@ -2187,6 +2401,17 @@ class AsrController(QtCore.QObject):
                 text = self._session_partial.strip()
         return text.strip()
 
+    def _current_stream_text(self) -> str:
+        committed = self._committed_text.replace("\n", "").strip()
+        partial = self._session_partial.strip()
+        if self._mode == "bidi_async":
+            return partial or committed
+        if partial and committed and partial.startswith(committed):
+            return partial
+        if committed and partial:
+            return committed + partial
+        return committed or partial
+
     def _update_current_item(self) -> None:
         if self._current_row is None:
             return
@@ -2195,7 +2420,7 @@ class AsrController(QtCore.QObject):
         self._history_model.update_item(self._current_row, text=text, partial=partial_flag)
         self._emit_history_row(self._current_row)
 
-    def _append_committed(self, text: str) -> None:
+    def _append_committed(self, text: str, skip_auto_submit: bool = False) -> None:
         text = text.strip()
         if not text:
             return
@@ -2204,12 +2429,74 @@ class AsrController(QtCore.QObject):
         else:
             self._committed_text = text
         self._update_current_item()
+        if not skip_auto_submit:
+            if self._auto_submit and self._session_mode == "hold" and self._mode == "bidi_async":
+                self._auto_submit_stream_update()
+            else:
+                if self._auto_submit:
+                    LOG.info(
+                        "AUTO_SUBMIT candidate mode=hold session_mode=%s text_len=%d",
+                        self._session_mode,
+                        len(text),
+                    )
+                if self._auto_submit and self._session_mode == "hold":
+                    self._auto_submit_text(text, immediate=True)
         self._update_stats()
 
     def _set_partial(self, text: str) -> None:
         self._session_partial = text.strip()
         self._update_current_item()
+        if self._auto_submit and self._session_mode == "hold" and self._mode == "bidi_async":
+            self._auto_submit_stream_update()
         self._update_stats()
+
+    def _auto_submit_stream_update(self) -> None:
+        raw_text = self._current_stream_text()
+        if not raw_text:
+            return
+        text = raw_text.replace("\n", "")
+        if not text:
+            return
+        if text == self._auto_submit_stream_last:
+            return
+        sent = self._auto_submit_stream_sent_text
+        overlap = 0
+        if sent:
+            max_len = min(len(sent), len(text))
+            for k in range(max_len, 0, -1):
+                if text.startswith(sent[-k:]):
+                    overlap = k
+                    break
+        LOG.info(
+            "AUTO_SUBMIT stream_update len=%d sent_len=%d overlap=%d last_len=%d",
+            len(text),
+            len(sent),
+            overlap,
+            len(self._auto_submit_stream_last),
+        )
+        delta = text[overlap:]
+        if delta:
+            LOG.info("AUTO_SUBMIT stream_delta len=%d", len(delta))
+            self._queue_auto_submit_stream(delta)
+            self._auto_submit_stream_sent_text = sent + delta
+        self._auto_submit_stream_last = text
+
+    def _queue_auto_submit_stream(self, text: str) -> None:
+        if not text:
+            return
+        self._auto_submit_stream_pending += text
+        if not self._auto_submit_stream_timer.isActive():
+            self._auto_submit_stream_timer.start()
+
+    def _flush_auto_submit_stream(self) -> None:
+        pending = self._auto_submit_stream_pending
+        if not pending:
+            return
+        self._auto_submit_stream_pending = ""
+        self._auto_submit_text(pending, immediate=True)
+
+    def _auto_submit_final_text(self, final_text: str) -> None:
+        return
 
     def _mode_to_url(self) -> str:
         if self._mode == "bidi":
@@ -2232,16 +2519,34 @@ class AsrController(QtCore.QObject):
             "request": {
                 "model_name": "bigmodel",
                 "enable_itn": True,
-                "enable_punc": True,
+                "enable_punc": self._enable_punc,
+                "enable_ddc": self._enable_ddc,
                 "enable_word": False,
                 "res_type": "full",
                 "nbest": 1,
                 "use_vad": True,
             },
         }
+        hotwords_context = self._build_hotwords_context()
+        if hotwords_context:
+            request["request"].setdefault("corpus", {})["context"] = hotwords_context
         if self._using_default_credentials():
             request["request"]["vad_config"] = {"max_single_segment_time": 60000}
         return json.dumps(request, ensure_ascii=False)
+
+    def _build_hotwords_context(self) -> str:
+        raw = (self._hotwords or "").strip()
+        if not raw:
+            return ""
+        parts = []
+        for item in raw.replace(",", "\n").splitlines():
+            word = item.strip()
+            if word:
+                parts.append({"word": word})
+        if not parts:
+            return ""
+        payload = {"hotwords": parts}
+        return json.dumps(payload, ensure_ascii=False)
 
     def _send_default_request(self) -> None:
         payload = self._default_request_json_text()
@@ -2316,6 +2621,336 @@ class AsrController(QtCore.QObject):
         if self._stats_timer.isActive():
             self._stats_timer.stop()
         self._update_stats()
+
+    def _auto_submit_text(self, text: str, immediate: bool) -> None:
+        if not text or not self._auto_submit:
+            return
+        if self._user_cancelled:
+            return
+        text = text.strip()
+        if not text:
+            return
+        try:
+            LOG.info(
+                "AUTO_SUBMIT start mode=%s immediate=%s session_mode=%s len=%d",
+                self._auto_submit_mode,
+                immediate,
+                self._session_mode,
+                len(text),
+            )
+            mode = self._auto_submit_mode
+            if mode == "type":
+                if not self._send_keystrokes_text(text):
+                    self._log("AUTO_SUBMIT", "direct typing failed")
+                return
+            if mode == "paste":
+                self._send_paste(text)
+                return
+            if self._should_try_direct_typing():
+                if self._send_keystrokes_text(text):
+                    return
+            self._send_paste(text)
+        except Exception as exc:
+            self._log("AUTO_SUBMIT", f"failed: {exc}")
+
+    def _should_try_direct_typing(self) -> bool:
+        if not self._is_windows:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class GUITHREADINFO(ctypes.Structure):
+                _fields_ = [
+                    ("cbSize", wintypes.DWORD),
+                    ("flags", wintypes.DWORD),
+                    ("hwndActive", wintypes.HWND),
+                    ("hwndFocus", wintypes.HWND),
+                    ("hwndCapture", wintypes.HWND),
+                    ("hwndMenuOwner", wintypes.HWND),
+                    ("hwndMoveSize", wintypes.HWND),
+                    ("hwndCaret", wintypes.HWND),
+                    ("rcCaret", wintypes.RECT),
+                ]
+
+            info = GUITHREADINFO()
+            info.cbSize = ctypes.sizeof(GUITHREADINFO)
+            if not ctypes.windll.user32.GetGUIThreadInfo(0, ctypes.byref(info)):
+                return False
+            return bool(info.hwndFocus) and bool(info.hwndCaret)
+        except Exception:
+            return False
+
+    def _send_keystrokes_text(self, text: str) -> bool:
+        if self._is_linux:
+            if self._is_wayland and self._wtype_path:
+                if self._wtype_type(text):
+                    return True
+            if self._xdotool_path and self._xdotool_type(
+                text,
+                clear_modifiers=self._session_mode == "hold",
+            ):
+                return True
+            if self._wtype_path and self._wtype_type(text):
+                return True
+        try:
+            from pynput.keyboard import Controller
+
+            controller = Controller()
+            controller.type(text)
+            self._mark_auto_submit_backend("pynput:type")
+            return True
+        except Exception:
+            return False
+
+    def _send_paste(self, text: str) -> None:
+        clipboard = QtWidgets.QApplication.clipboard()
+        clipboard.setText(text)
+        key_combo = self._normalize_key_combo(self._auto_submit_paste_keys)
+        if not key_combo:
+            key_combo = self._default_paste_keys()
+        if self._is_linux:
+            if self._is_wayland and self._wtype_path:
+                if self._wtype_key(key_combo):
+                    return
+            if self._xdotool_path and self._xdotool_key(key_combo):
+                return
+            if self._wtype_path and self._wtype_key(key_combo):
+                return
+        try:
+            if not self._send_key_combo_pynput(key_combo):
+                fallback = self._default_paste_keys()
+                self._send_key_combo_pynput(fallback)
+            self._mark_auto_submit_backend("pynput:paste")
+        except Exception:
+            pass
+
+    def _default_paste_keys(self) -> str:
+        return "cmd+v" if self._is_mac else "ctrl+v"
+
+    def _normalize_key_combo(self, combo: str) -> str:
+        if not combo:
+            return ""
+        parts = [p.strip().lower() for p in re.split(r"[+\\s]+", combo) if p.strip()]
+        return "+".join(parts)
+
+    def _parse_key_combo(self, combo: str) -> Tuple[List[str], Optional[str]]:
+        parts = [p.strip().lower() for p in re.split(r"[+\\s]+", combo) if p.strip()]
+        modifiers = []
+        key = None
+        for part in parts:
+            if part in ("ctrl", "control", "ctl"):
+                modifiers.append("ctrl")
+            elif part in ("shift",):
+                modifiers.append("shift")
+            elif part in ("alt", "option"):
+                modifiers.append("alt")
+            elif part in ("super", "cmd", "command", "win", "windows", "meta"):
+                modifiers.append("super")
+            else:
+                key = part
+        return modifiers, key
+
+    def _send_key_combo_pynput(self, combo: str) -> bool:
+        modifiers, key = self._parse_key_combo(combo)
+        if not key:
+            return False
+        try:
+            from pynput.keyboard import Controller, Key
+
+            key_map = {
+                "enter": Key.enter,
+                "return": Key.enter,
+                "tab": Key.tab,
+                "space": Key.space,
+                "backspace": Key.backspace,
+                "delete": Key.delete,
+                "esc": Key.esc,
+            }
+            mod_map = {
+                "ctrl": Key.ctrl,
+                "shift": Key.shift,
+                "alt": Key.alt,
+                "super": Key.cmd,
+            }
+            controller = Controller()
+            pressed_mods = []
+            for mod in modifiers:
+                key_obj = mod_map.get(mod)
+                if key_obj:
+                    controller.press(key_obj)
+                    pressed_mods.append(key_obj)
+            key_obj = key_map.get(key, key if len(key) == 1 else None)
+            if not key_obj:
+                for mod in reversed(pressed_mods):
+                    controller.release(mod)
+                return False
+            controller.press(key_obj)
+            controller.release(key_obj)
+            for mod in reversed(pressed_mods):
+                controller.release(mod)
+            return True
+        except Exception:
+            return False
+
+    def _auto_submit_type_delay_ms(self, text: str) -> int:
+        char_count = sum(1 for c in text if not c.isspace())
+        if char_count <= 0:
+            return 60
+        delay = int(600 / char_count)
+        if delay < 20:
+            delay = 20
+        if delay > 80:
+            delay = 80
+        return delay
+
+    def _xdotool_type(self, text: str, clear_modifiers: bool = False) -> bool:
+        if not self._xdotool_path:
+            return False
+        preview = text
+        if len(preview) > 120:
+            preview = preview[:120] + "..."
+        delay_ms = self._auto_submit_type_delay_ms(text)
+        try:
+            if clear_modifiers:
+                LOG.info(
+                    "AUTO_SUBMIT xdotool type --clearmodifiers --delay %d %r (len=%d)",
+                    delay_ms,
+                    preview,
+                    len(text),
+                )
+            else:
+                LOG.info("AUTO_SUBMIT xdotool type --delay %d %r (len=%d)", delay_ms, preview, len(text))
+            args = [self._xdotool_path, "type"]
+            if clear_modifiers:
+                args.append("--clearmodifiers")
+            args += ["--delay", str(delay_ms), text]
+            if not self._enqueue_auto_submit_cmd(args, "xdotool:type"):
+                return False
+            self._mark_auto_submit_backend("xdotool:type")
+            return True
+        except Exception:
+            return False
+
+    def _xdotool_key(self, key_combo: str) -> bool:
+        if not self._xdotool_path:
+            return False
+        try:
+            LOG.info("AUTO_SUBMIT xdotool key %s", key_combo)
+            if not self._enqueue_auto_submit_cmd(
+                [self._xdotool_path, "key", "--clearmodifiers", key_combo],
+                "xdotool:paste",
+            ):
+                return False
+            self._mark_auto_submit_backend("xdotool:paste")
+            return True
+        except Exception:
+            return False
+
+    def _wtype_type(self, text: str) -> bool:
+        if not self._wtype_path:
+            return False
+        try:
+            args = [self._wtype_path]
+            if text.startswith("-"):
+                args.append("--")
+            args.append(text)
+            if not self._enqueue_auto_submit_cmd(args, "wtype:type"):
+                return False
+            self._mark_auto_submit_backend("wtype:type")
+            return True
+        except Exception:
+            return False
+
+    def _wtype_key(self, key_combo: str) -> bool:
+        if not self._wtype_path:
+            return False
+        try:
+            normalized = self._normalize_key_combo(key_combo)
+            modifiers, key = self._parse_key_combo(normalized)
+            if not key:
+                return False
+            key_map = {"enter": "Return", "return": "Return", "tab": "Tab", "space": "space"}
+            mod_map = {"ctrl": "ctrl", "shift": "shift", "alt": "alt", "super": "logo"}
+            args = [self._wtype_path]
+            for mod in modifiers:
+                mapped = mod_map.get(mod)
+                if mapped:
+                    args += ["-M", mapped]
+            args.append(key_map.get(key, key))
+            for mod in reversed(modifiers):
+                mapped = mod_map.get(mod)
+                if mapped:
+                    args += ["-m", mapped]
+            if not self._enqueue_auto_submit_cmd(args, "wtype:paste"):
+                return False
+            self._mark_auto_submit_backend("wtype:paste")
+            return True
+        except Exception:
+            return False
+
+    def _enqueue_auto_submit_cmd(self, args: List[str], label: str) -> bool:
+        try:
+            self._ensure_auto_submit_worker()
+            self._auto_submit_queue.put((args, label))
+            return True
+        except Exception:
+            return False
+
+    def _ensure_auto_submit_worker(self) -> None:
+        worker = self._auto_submit_worker
+        if worker and worker.is_alive():
+            return
+        with self._auto_submit_worker_lock:
+            worker = self._auto_submit_worker
+            if worker and worker.is_alive():
+                return
+            self._auto_submit_worker = threading.Thread(
+                target=self._auto_submit_worker_loop,
+                name="auto_submit_worker",
+                daemon=True,
+            )
+            self._auto_submit_worker.start()
+
+    def _auto_submit_worker_loop(self) -> None:
+        while True:
+            args, label = self._auto_submit_queue.get()
+            try:
+                subprocess.run(
+                    args,
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except Exception as exc:
+                LOG.info("AUTO_SUBMIT %s failed: %s", label, exc)
+            finally:
+                self._auto_submit_queue.task_done()
+
+    def _refresh_auto_submit_status(self, last_used: Optional[str] = None) -> None:
+        available = []
+        if self._xdotool_path:
+            available.append("xdotool")
+        if self._wtype_path:
+            available.append("wtype")
+        try:
+            import pynput  # noqa: F401
+
+            available.append("pynput")
+        except Exception:
+            pass
+        available_text = "、".join(available) if available else "无"
+        if last_used:
+            status = f"当前上屏后端：{last_used}"
+        else:
+            order = "Wayland: wtype > xdotool > pynput" if self._is_wayland else "X11: xdotool > wtype > pynput"
+            status = f"上屏后端：{self._auto_submit_mode}（{order}），可用：{available_text}"
+        if status != self._auto_submit_status:
+            self._auto_submit_status = status
+            self.autoSubmitStatusChanged.emit()
+
+    def _mark_auto_submit_backend(self, backend: str) -> None:
+        self._refresh_auto_submit_status(last_used=backend)
 
     def _stop_mic_send_last(self) -> None:
         remainder = bytes(self._mic_buffer) if self._mic_buffer else b""
@@ -2410,6 +3045,7 @@ class AsrController(QtCore.QObject):
         except Exception:
             obj = None
 
+        final_text: Optional[str] = None
         if isinstance(obj, dict):
             result = obj.get("result")
             if isinstance(result, dict):
@@ -2439,7 +3075,10 @@ class AsrController(QtCore.QObject):
                     txt = result.get("text")
                     if isinstance(txt, str) and txt.strip():
                         full = txt.strip()
-                        if self._last_full_text and full.startswith(self._last_full_text):
+                        if self._mode == "bidi_async":
+                            partial = full
+                            final_text = full
+                        elif self._last_full_text and full.startswith(self._last_full_text):
                             suffix = full[len(self._last_full_text) :].strip()
                             if suffix:
                                 self._append_committed(suffix)
@@ -2448,6 +3087,10 @@ class AsrController(QtCore.QObject):
                         self._last_full_text = full
 
         self._set_partial(partial)
+        if final_text and parsed.flags == 0b0011:
+            self._session_partial = ""
+            self._append_committed(final_text, skip_auto_submit=True)
+            self._auto_submit_final_text(final_text)
 
         if self._pending_close_after_last and parsed.flags == 0b0011:
             session_text = self._current_session_text(include_partial=False)
@@ -2489,6 +3132,43 @@ class AsrController(QtCore.QObject):
                 self.recording_indicator.show_hold_mode()
         except Exception:
             pass
+
+    def _start_escape_listener(self) -> None:
+        if not self._session_mode or self._session_mode != "toggle":
+            return
+        if self._escape_listener is not None:
+            return
+        try:
+            from pynput import keyboard
+
+            def on_press(key):  # noqa: ANN001
+                try:
+                    if key == keyboard.Key.esc:
+                        QtCore.QTimer.singleShot(0, self._on_escape_cancel)
+                except Exception:
+                    pass
+
+            listener = keyboard.Listener(on_press=on_press)
+            listener.start()
+            self._escape_listener = listener
+        except Exception:
+            self._escape_listener = None
+
+    def _stop_escape_listener(self) -> None:
+        listener = self._escape_listener
+        if listener is None:
+            return
+        try:
+            listener.stop()
+        except Exception:
+            pass
+        self._escape_listener = None
+
+    def _on_escape_cancel(self) -> None:
+        if self._session_mode != "toggle":
+            return
+        self._user_cancelled = True
+        self.stop_recognition()
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:  # noqa: N802
         if hasattr(self, "hotkey_manager") and self.hotkey_manager:
@@ -2709,7 +3389,13 @@ def main() -> int:
         tray_icon.show()
         view.enable_tray(True)
         update_show_action()
-    view.show()
+    if controller.startMinimized:
+        if tray_icon is not None:
+            view.hide()
+        else:
+            view.showMinimized()
+    else:
+        view.show()
     return app.exec()
 
 

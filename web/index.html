@@ -244,6 +244,39 @@
             ring: 2px rgba(24, 24, 27, 0.05);
         }
 
+        select {
+            width: 100%;
+            padding: 10px 12px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            font-size: 14px;
+            background: #fff;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 96px;
+            padding: 10px 12px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            font-size: 14px;
+            font-family: var(--font-family);
+            line-height: 1.4;
+            resize: vertical;
+            transition: all 0.2s;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent-black);
+        }
+
+        .hint-text {
+            margin-top: 6px;
+            font-size: 12px;
+            color: var(--text-muted);
+        }
+
         /* 分段选择器 */
         .segmented {
             display: flex;
@@ -312,6 +345,89 @@
         input:checked + .slider .slider-knob { transform: translateX(18px); }
         .switch.is-checked .slider { background-color: var(--accent-black); }
         .switch.is-checked .slider .slider-knob { transform: translateX(18px); }
+        .switch input:disabled + .slider { opacity: 0.5; cursor: not-allowed; }
+
+        .auto-submit-advanced {
+            position: relative;
+        }
+
+        .auto-submit-label {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+
+        .hotkey-title {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            font-weight: 700;
+            line-height: 1;
+        }
+
+        .hotkey-title .hint-text {
+            font-size: 12px;
+            font-weight: 400;
+            line-height: 1;
+            transform: translateY(-2px);
+        }
+
+        .icon-btn {
+            width: 18px;
+            height: 18px;
+            border: none;
+            background: transparent;
+            padding: 0;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            opacity: 0.75;
+            transition: opacity 0.2s ease;
+        }
+
+        .icon-btn:hover { opacity: 1; }
+        .icon-btn:disabled { opacity: 0.3; cursor: not-allowed; }
+
+        .advanced-panel {
+            position: absolute;
+            left: 0;
+            top: 34px;
+            width: 160px;
+            padding: 10px;
+            border-radius: var(--radius-md);
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            box-shadow: var(--shadow);
+            display: none;
+            z-index: 10;
+        }
+
+        .auto-submit-options {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .auto-submit-option {
+            width: 100%;
+            text-align: left;
+            border: none;
+            background: transparent;
+            padding: 6px 8px;
+            border-radius: 8px;
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-main);
+            cursor: pointer;
+        }
+
+        .auto-submit-option.active {
+            background: #e4e4e7;
+        }
 
         /* 录制快捷键样式 */
         .hotkey-input-group {
@@ -386,10 +502,73 @@
                     </button>
                     <div style="flex: 1; display: flex; align-items: stretch;">
                         <div class="segmented" style="width: 100%;">
-                            <button data-mode="nostream" class="seg-btn active">快速</button>
-                            <button data-mode="bidi_async" class="seg-btn">智能</button>
+                            <button data-mode="nostream" class="seg-btn active">精准</button>
+                            <button data-mode="bidi_async" class="seg-btn">实时</button>
                         </div>
                     </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title">个性化设置</div>
+                <div class="form-group">
+                    <div class="switch-row">
+                        <span style="font-size: 13px; font-weight: 600;">默认启动时最小化</span>
+                        <label class="switch">
+                            <input id="start-minimized" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">下次启动生效</div>
+                </div>
+                <div class="form-group auto-submit-advanced">
+                    <div class="switch-row">
+                        <span class="auto-submit-label">
+                            自动上屏
+                            <button id="auto-submit-advanced-toggle" class="icon-btn" type="button" title="高级选项">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                                    <path d="M12 8.5a3.5 3.5 0 1 0 0 7 3.5 3.5 0 0 0 0-7Z" stroke="#3f3f46" stroke-width="1.5"/>
+                                    <path d="M4.5 12a7.5 7.5 0 0 1 .1-1.2l-2-1.5 2-3.4 2.4 1a7.6 7.6 0 0 1 2-1.1l.4-2.6h4l.4 2.6c.7.2 1.4.6 2 1.1l2.4-1 2 3.4-2 1.5a7.5 7.5 0 0 1 0 2.4l2 1.5-2 3.4-2.4-1a7.6 7.6 0 0 1-2 1.1l-.4 2.6h-4l-.4-2.6a7.6 7.6 0 0 1-2-1.1l-2.4 1-2-3.4 2-1.5A7.5 7.5 0 0 1 4.5 12Z" stroke="#3f3f46" stroke-width="1.5" stroke-linejoin="round"/>
+                                </svg>
+                            </button>
+                        </span>
+                        <label class="switch">
+                            <input id="auto-submit" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">实时模式下，按住说实时上屏，自由说结束后上屏。精准模式下统一结束后上屏</div>
+                    <div id="auto-submit-advanced-panel" class="advanced-panel">
+                        <div class="auto-submit-options">
+                            <button id="auto-submit-mode-type" class="auto-submit-option" type="button" data-mode="type">直接输入</button>
+                            <button id="auto-submit-mode-paste" class="auto-submit-option" type="button" data-mode="paste">快捷键粘贴</button>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-group">
+                    <div class="switch-row" style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: 600;">启用标点符号</span>
+                        <label class="switch">
+                            <input id="enable-punc" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">启用后会识别情绪和语义场景，最终文本带有逗号句号等标点符号</div>
+                </div>
+                <div class="form-group">
+                    <div class="switch-row" style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: 600;">启用语义顺滑</span>
+                        <label class="switch">
+                            <input id="enable-ddc" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">把一些语言停顿的地方自动抹平</div>
+                </div>
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label>热词设置</label>
+                    <div class="hint-text" style="margin-bottom: 6px;">每行一个热词，用于提高人名、品牌、术语等词汇的识别准确率</div>
+                    <textarea id="hotwords" placeholder="每行一个热词"></textarea>
                 </div>
             </div>
 
@@ -409,7 +588,10 @@
 
                 <div class="form-group" style="background: #f9fafb; padding: 12px; border-radius: var(--radius-md);">
                     <div class="switch-row" style="margin-bottom: 8px;">
-                        <span style="font-size: 13px; font-weight: 700;">按住说</span>
+                        <span class="hotkey-title">
+                            按住说
+                            <span class="hint-text">自动上屏开启时，Linux 平台不要使用修饰键，建议使用 F2</span>
+                        </span>
                         <label class="switch">
                             <input id="primary-enabled" type="checkbox">
                             <span class="slider"><span class="slider-knob"></span></span>
@@ -506,6 +688,13 @@
    $("app-id").value = controller.appId || "";
    $("access-token").value = controller.accessToken || "";
    $("use-gzip").checked = !!controller.useGzip;
+   $("start-minimized").checked = !!controller.startMinimized;
+   $("auto-submit").checked = !!controller.autoSubmit;
+   syncAutoSubmitModeOptions();
+   syncAutoSubmitAdvancedToggle();
+   $("enable-punc").checked = !!controller.enablePunc;
+   $("enable-ddc").checked = !!controller.enableDdc;
+   $("hotwords").value = controller.hotwords || "";
 
    // 模式切换
    document.querySelectorAll(".seg-btn[data-mode]").forEach(btn => {
@@ -625,7 +814,31 @@
      const input = el.querySelector("input[type='checkbox']");
      if (!input) return;
      el.classList.toggle("is-checked", !!input.checked);
+     el.classList.toggle("is-disabled", !!input.disabled);
    });
+ }
+
+ function syncAutoSubmitModeOptions() {
+   const typeRadio = $("auto-submit-mode-type");
+   const pasteRadio = $("auto-submit-mode-paste");
+   if (!typeRadio || !pasteRadio) return;
+   let mode = (controller && controller.autoSubmitMode) ? controller.autoSubmitMode : "type";
+   if (mode !== "type" && mode !== "paste") {
+     mode = "type";
+   }
+   typeRadio.classList.toggle("active", mode === "type");
+   pasteRadio.classList.toggle("active", mode === "paste");
+ }
+
+ function syncAutoSubmitAdvancedToggle() {
+   const toggle = $("auto-submit-advanced-toggle");
+   const panel = $("auto-submit-advanced-panel");
+   if (!toggle) return;
+   const enabled = controller && controller.autoSubmit;
+   toggle.disabled = !enabled;
+   if (!enabled && panel) {
+     panel.style.display = "none";
+   }
  }
 
  // 事件绑定
@@ -636,6 +849,36 @@
    $("app-id").addEventListener("change", (e) => controller && (controller.appId = e.target.value));
    $("access-token").addEventListener("change", (e) => controller && (controller.accessToken = e.target.value));
    $("use-gzip").addEventListener("change", (e) => controller && (controller.useGzip = e.target.checked));
+   $("start-minimized").addEventListener("change", (e) => controller && (controller.startMinimized = e.target.checked));
+   $("auto-submit").addEventListener("change", (e) => {
+     if (!controller) return;
+     controller.autoSubmit = e.target.checked;
+     syncAutoSubmitAdvancedToggle();
+   });
+   $("auto-submit-advanced-toggle").addEventListener("click", (e) => {
+     e.stopPropagation();
+     const panel = $("auto-submit-advanced-panel");
+     if (!panel) return;
+     panel.style.display = panel.style.display === "block" ? "none" : "block";
+   });
+   $("auto-submit-mode-type").addEventListener("click", () => {
+     if (!controller) return;
+     controller.autoSubmitMode = "type";
+     syncAutoSubmitModeOptions();
+     const panel = $("auto-submit-advanced-panel");
+     if (panel) panel.style.display = "none";
+   });
+   $("auto-submit-mode-paste").addEventListener("click", () => {
+     if (!controller) return;
+     controller.autoSubmitMode = "paste";
+     controller.autoSubmitPasteKeys = "";
+     syncAutoSubmitModeOptions();
+     const panel = $("auto-submit-advanced-panel");
+     if (panel) panel.style.display = "none";
+   });
+   $("enable-punc").addEventListener("change", (e) => controller && (controller.enablePunc = e.target.checked));
+   $("enable-ddc").addEventListener("change", (e) => controller && (controller.enableDdc = e.target.checked));
+   $("hotwords").addEventListener("input", (e) => controller && (controller.hotwords = e.target.value));
 
    // 全局模式切换
    document.querySelectorAll(".seg-btn[data-mode]").forEach(btn => {
@@ -674,6 +917,13 @@
    });
    syncSwitches();
    document.addEventListener("click", (e) => {
+     const panel = $("auto-submit-advanced-panel");
+     const toggle = $("auto-submit-advanced-toggle");
+     if (panel && panel.style.display === "block") {
+       if (!panel.contains(e.target) && !toggle.contains(e.target)) {
+         panel.style.display = "none";
+       }
+     }
      if (!activeCaptureTarget) return;
      if (e.target.closest(".capture-btn")) return;
      cancelCapture();
@@ -692,6 +942,8 @@
      'statusTextChanged', 'isConnectingChanged', 'isSendingChanged',
      'isConnectedChanged', 'statsChanged', 'modeChanged',
      'appIdChanged', 'accessTokenChanged', 'useGzipChanged',
+     'startMinimizedChanged', 'autoSubmitChanged', 'autoSubmitModeChanged',
+     'enablePuncChanged', 'enableDdcChanged', 'hotwordsChanged',
      'primaryHotkeyTextChanged', 'primaryHotkeyEnabledChanged',
      'freehandHotkeyTextChanged', 'freehandHotkeyEnabledChanged',
      'mouseHotkeyModeChanged', 'mouseModeEnabledChanged'

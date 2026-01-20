@@ -25,6 +25,9 @@ sync:
 build-linux: sync
 	JT_BINARY_NAME=just-talk-x86_64 $(UV) run pyinstaller just_talk.spec
 
+release-linux:
+	./scripts/release-linux.sh
+
 build-windows:
 	@if [ -f "$(WIN_ICON_PNG)" ] && [ ! -f "$(WIN_ICON)" ]; then \
 		if [ -n "$(ICON_CONVERT)" ]; then \

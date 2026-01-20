@@ -133,6 +133,19 @@ class HotkeyListenerThread(QThread):
         except Exception:
             return str(key).lower()
 
+    @staticmethod
+    def _modifier_keys() -> Set[str]:
+        return {
+            "ctrl",
+            "right_ctrl",
+            "super",
+            "right_super",
+            "alt",
+            "right_alt",
+            "shift",
+            "right_shift",
+        }
+
     def _on_key_press(self, key) -> None:
         """处理按键按下"""
         try:
@@ -164,10 +177,21 @@ class HotkeyListenerThread(QThread):
         """处理按键释放"""
         try:
             key_name = self._normalize_key(key)
+            modifier_keys = self._modifier_keys()
 
             # 检查是否释放了激活的组合键
             for hotkey_id, config in self._config.keyboard_hotkeys.items():
                 if hotkey_id in self._active_combos and key_name in config.keys:
+                    if config.mode == "hold":
+                        non_modifier_keys = {k for k in config.keys if k not in modifier_keys}
+                        if non_modifier_keys:
+                            # 只允许非修饰键触发release，避免修饰键被清理导致误触发
+                            if key_name not in non_modifier_keys:
+                                continue
+                            remaining = set(self._pressed_keys)
+                            remaining.discard(key_name)
+                            if remaining.intersection(non_modifier_keys):
+                                continue
                     # 释放了组合键的一部分
                     del self._active_combos[hotkey_id]
 
