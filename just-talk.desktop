@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Just Talk
+Exec=just-talk
+Icon=just-talk
+Terminal=false
+Categories=Audio;Utility;

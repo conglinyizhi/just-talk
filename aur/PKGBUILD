@@ -1,0 +1,45 @@
+pkgname=just-talk-git
+pkgver=r0.0
+pkgrel=1
+pkgdesc="Speech recognition app with global hotkey support"
+arch=('x86_64')
+url="https://github.com/whoamihappyhacking/just-talk"
+license=('GPL-3.0-or-later')
+depends=(
+  'python>=3.13'
+  'python-pyqt6'
+  'python-pyqt6-webengine'
+  'python-pynput'
+)
+makedepends=(
+  'git'
+  'python-pyinstaller'
+  'python-pyinstaller-hooks-contrib'
+)
+provides=('just-talk')
+conflicts=('just-talk')
+source=("just-talk::git+https://github.com/whoamihappyhacking/just-talk.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$srcdir/just-talk"
+  printf "r%s.%s" \
+    "$(git rev-list --count HEAD)" \
+    "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd "$srcdir/just-talk"
+  export JT_BINARY_NAME=just-talk
+  export JT_ONEFILE=1
+  export JT_CONSOLE=0
+  pyinstaller just_talk.spec
+}
+
+package() {
+  cd "$srcdir/just-talk"
+  install -Dm755 "dist/just-talk" "$pkgdir/usr/bin/just-talk"
+  install -Dm644 "icon.png" "$pkgdir/usr/share/icons/hicolor/256x256/apps/just-talk.png"
+  install -Dm644 "just-talk.desktop" "$pkgdir/usr/share/applications/just-talk.desktop"
+  install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}
