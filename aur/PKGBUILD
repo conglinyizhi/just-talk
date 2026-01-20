@@ -36,7 +36,7 @@ provides=('just-talk')
 conflicts=('just-talk' 'just-talk-git')
 _pkgfile="just-talk-linux-x86_64.tar.gz"
 source=("${_pkgfile}::https://github.com/whoamihappyhacking/just-talk/releases/download/v${pkgver}/${_pkgfile}")
-sha256sums=('SKIP')
+sha256sums=('53d62d7a8a464f6f7071563facf5e3f17145a983bdd78ec130ee01277a5115b9')
 
 package() {
   install -Dm755 "$srcdir/just-talk" "$pkgdir/usr/bin/just-talk"

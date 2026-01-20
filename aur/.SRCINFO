@@ -34,6 +34,6 @@ pkgbase = just-talk-bin
 	conflicts = just-talk
 	conflicts = just-talk-git
 	source = just-talk-linux-x86_64.tar.gz::https://github.com/whoamihappyhacking/just-talk/releases/download/v0.1.0/just-talk-linux-x86_64.tar.gz
-	sha256sums = SKIP
+	sha256sums = 53d62d7a8a464f6f7071563facf5e3f17145a983bdd78ec130ee01277a5115b9
 
 pkgname = just-talk-bin
