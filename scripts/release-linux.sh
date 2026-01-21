@@ -50,33 +50,35 @@ rm -rf "$tmpdir"
 
 sha256="$(sha256sum "${release_dir}/${pkg}" | awk '{print $1}')"
 
-if [ -f "aur/PKGBUILD" ]; then
+aur_dir="${repo_root}/../just-talk-aur"
+
+if [ -f "${aur_dir}/PKGBUILD" ]; then
   python - <<PY
 from pathlib import Path
 import re
 
 version = "${version}"
 sha256 = "${sha256}"
-path = Path("aur/PKGBUILD")
+path = Path("${aur_dir}/PKGBUILD")
 text = path.read_text(encoding="utf-8")
 text = re.sub(r"^pkgver=.*$", f"pkgver={version}", text, flags=re.M)
-text = re.sub(r"^sha256sums=\\('[0-9a-f]+'\\)$", f"sha256sums=('{sha256}')", text, flags=re.M)
+text = re.sub(r"^sha256sums=\('[0-9a-f]+'\)$", f"sha256sums=('{sha256}')", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
 fi
 
-if [ -f "aur/.SRCINFO" ]; then
+if [ -f "${aur_dir}/.SRCINFO" ]; then
   python - <<PY
 from pathlib import Path
 import re
 
 version = "${version}"
 sha256 = "${sha256}"
-path = Path("aur/.SRCINFO")
+path = Path("${aur_dir}/.SRCINFO")
 text = path.read_text(encoding="utf-8")
-text = re.sub(r"^\\tpkgver = .*$", f"\\tpkgver = {version}", text, flags=re.M)
-text = re.sub(r"just-talk-linux-x86_64-v[0-9.]+\\.tar\\.zst", f"just-talk-linux-x86_64-v{version}.tar.zst", text)
-text = re.sub(r"^\\tsha256sums = [0-9a-f]+$", f"\\tsha256sums = {sha256}", text, flags=re.M)
+text = re.sub(r"^\tpkgver = .*$", f"\tpkgver = {version}", text, flags=re.M)
+text = re.sub(r"just-talk-linux-x86_64-v[0-9.]+\.tar\.zst", f"just-talk-linux-x86_64-v{version}.tar.zst", text)
+text = re.sub(r"^\tsha256sums = [0-9a-f]+$", f"\tsha256sums = {sha256}", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
 fi
