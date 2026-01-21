@@ -2565,7 +2565,30 @@ class AsrController(QtCore.QObject):
             return
         self._show_indicator_mode(self._indicator_mode or self._primary_hotkey_mode)
 
+        # 检查是否有可用的音频输入设备
+        audio_inputs = QMediaDevices.audioInputs()
+        if not audio_inputs:
+            self._log("MIC", "No audio input devices found (Qt multimedia backend may be missing)")
+            QtWidgets.QMessageBox.critical(
+                None,
+                "错误",
+                "未检测到音频输入设备。\n\n"
+                "可能原因：\n"
+                "1. 没有麦克风设备\n"
+                "2. Qt6 多媒体后端插件缺失\n\n"
+                "Linux 用户请尝试安装：\n"
+                "  sudo pacman -S qt6-multimedia qt6-multimedia-ffmpeg\n"
+                "或：\n"
+                "  sudo apt install libqt6multimedia6",
+            )
+            return
+
         device = QMediaDevices.defaultAudioInput()
+        if device is None or device.isNull():
+            # 如果默认设备无效，尝试使用第一个可用设备
+            device = audio_inputs[0]
+            self._log("MIC", f"Using fallback device: {device.description()}")
+
         fmt = QAudioFormat()
         fmt.setSampleRate(16000)
         fmt.setChannelCount(1)
@@ -2713,6 +2736,15 @@ class AsrController(QtCore.QObject):
             if self._is_wayland and self._wtype_path:
                 if self._wtype_key(key_combo):
                     return
+            # X11: 尝试使用底层 XTest 扩展 (PRIMARY + Shift+Insert)
+            if not self._is_wayland:
+                try:
+                    from x11_paste import x11_paste, is_available
+                    if is_available() and x11_paste(text):
+                        self._mark_auto_submit_backend("x11_xtest:shift_insert")
+                        return
+                except Exception:
+                    pass
             if self._xdotool_path and self._xdotool_key(key_combo):
                 return
             if self._wtype_path and self._wtype_key(key_combo):

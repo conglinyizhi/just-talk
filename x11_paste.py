@@ -1,0 +1,227 @@
+"""
+X11 底层粘贴模块 - 使用 XTest 扩展
+
+方案 B: PRIMARY + Shift+Insert
+- 设置 PRIMARY selection owner
+- 使用 XTest 发送 Shift+Insert
+- 后台线程响应 SelectionRequest
+"""
+
+import threading
+import time
+from typing import Optional
+
+try:
+    from Xlib import display, X, XK, Xatom
+    from Xlib.ext import xtest
+    from Xlib.protocol import event
+    XLIB_AVAILABLE = True
+except ImportError:
+    XLIB_AVAILABLE = False
+
+
+class X11Paste:
+    """X11 底层粘贴实现 - 方案 B: PRIMARY + Shift+Insert"""
+
+    def __init__(self):
+        if not XLIB_AVAILABLE:
+            raise RuntimeError("python-xlib not available")
+
+        self._display: Optional[display.Display] = None
+        self._owner_window = None
+        self._selection_text: bytes = b""
+        self._handler_thread: Optional[threading.Thread] = None
+        self._stop_handler = False
+
+    def _ensure_display(self) -> display.Display:
+        """确保 display 连接存在"""
+        if self._display is None:
+            self._display = display.Display()
+        return self._display
+
+    def _get_atoms(self, disp: display.Display):
+        """获取所需的 atoms"""
+        return {
+            'PRIMARY': disp.intern_atom("PRIMARY"),
+            'UTF8_STRING': disp.intern_atom("UTF8_STRING"),
+            'TARGETS': disp.intern_atom("TARGETS"),
+        }
+
+    def _get_keycodes(self, disp: display.Display):
+        """获取所需的 keycodes"""
+        return {
+            'shift': disp.keysym_to_keycode(XK.XK_Shift_L),
+            'insert': disp.keysym_to_keycode(XK.XK_Insert),
+        }
+
+    def _set_primary(self, text: str, disp: display.Display) -> bool:
+        """设置 PRIMARY selection"""
+        atoms = self._get_atoms(disp)
+        root = disp.screen().root
+
+        # 创建 owner 窗口
+        self._owner_window = root.create_window(
+            0, 0, 1, 1, 0, X.CopyFromParent, X.InputOnly
+        )
+        self._owner_window.set_selection_owner(atoms['PRIMARY'], X.CurrentTime)
+        disp.sync()
+
+        self._selection_text = text.encode('utf-8')
+        return True
+
+    def _respond_selection(self, ev, disp: display.Display):
+        """响应 SelectionRequest"""
+        atoms = self._get_atoms(disp)
+        target = ev.target
+        prop = ev.property if ev.property else ev.target
+        requestor = ev.requestor
+
+        if target == atoms['TARGETS']:
+            # 返回支持的目标类型
+            requestor.change_property(
+                prop, Xatom.ATOM, 32,
+                [atoms['UTF8_STRING'], Xatom.STRING]
+            )
+        elif target in (atoms['UTF8_STRING'], Xatom.STRING):
+            # 返回文本数据
+            requestor.change_property(prop, target, 8, self._selection_text)
+        else:
+            prop = X.NONE
+
+        # 发送 SelectionNotify
+        notify = event.SelectionNotify(
+            time=ev.time,
+            requestor=requestor,
+            selection=ev.selection,
+            target=target,
+            property=prop
+        )
+        requestor.send_event(notify)
+        disp.flush()
+
+    def _handle_selection_requests(self, disp: display.Display, timeout: float = 2.0):
+        """处理 SelectionRequest 事件"""
+        start = time.time()
+        handled = 0
+        while not self._stop_handler and time.time() - start < timeout:
+            if disp.pending_events():
+                ev = disp.next_event()
+                if ev.type == X.SelectionRequest:
+                    self._respond_selection(ev, disp)
+                    handled += 1
+                    if handled >= 5:  # 处理足够多的请求后退出
+                        break
+            time.sleep(0.01)
+
+    def _xtest_key_combo(self, disp: display.Display, modifier_keycode: int, key_keycode: int):
+        """使用 XTest 发送组合键"""
+        xtest.fake_input(disp, X.KeyPress, modifier_keycode)
+        disp.sync()
+        time.sleep(0.01)
+        xtest.fake_input(disp, X.KeyPress, key_keycode)
+        disp.sync()
+        time.sleep(0.01)
+        xtest.fake_input(disp, X.KeyRelease, key_keycode)
+        disp.sync()
+        time.sleep(0.01)
+        xtest.fake_input(disp, X.KeyRelease, modifier_keycode)
+        disp.sync()
+
+    def paste(self, text: str) -> bool:
+        """
+        粘贴文本到当前焦点窗口
+
+        使用 PRIMARY selection + Shift+Insert
+
+        Args:
+            text: 要粘贴的文本
+
+        Returns:
+            成功返回 True，失败返回 False
+        """
+        if not XLIB_AVAILABLE:
+            return False
+
+        try:
+            disp = self._ensure_display()
+            keycodes = self._get_keycodes(disp)
+
+            # 设置 PRIMARY selection
+            self._set_primary(text, disp)
+
+            # 启动后台线程处理 selection 请求
+            self._stop_handler = False
+            self._handler_thread = threading.Thread(
+                target=self._handle_selection_requests,
+                args=(disp, 2.0),
+                daemon=True
+            )
+            self._handler_thread.start()
+
+            # 等待一下确保 selection 设置完成
+            time.sleep(0.05)
+
+            # 发送 Shift+Insert
+            self._xtest_key_combo(disp, keycodes['shift'], keycodes['insert'])
+
+            # 等待粘贴完成
+            time.sleep(0.1)
+
+            return True
+
+        except Exception:
+            return False
+
+    def cleanup(self):
+        """清理资源"""
+        self._stop_handler = True
+        if self._handler_thread and self._handler_thread.is_alive():
+            self._handler_thread.join(timeout=0.5)
+        if self._owner_window:
+            try:
+                self._owner_window.destroy()
+            except Exception:
+                pass
+            self._owner_window = None
+        if self._display:
+            try:
+                self._display.close()
+            except Exception:
+                pass
+            self._display = None
+
+
+# 单例实例
+_x11_paste: Optional[X11Paste] = None
+
+
+def x11_paste(text: str) -> bool:
+    """
+    使用 X11 底层 API 粘贴文本（PRIMARY + Shift+Insert）
+
+    Args:
+        text: 要粘贴的文本
+
+    Returns:
+        成功返回 True，失败返回 False
+    """
+    global _x11_paste
+
+    if not XLIB_AVAILABLE:
+        return False
+
+    try:
+        if _x11_paste is None:
+            _x11_paste = X11Paste()
+        return _x11_paste.paste(text)
+    except Exception:
+        # 重置实例以便下次重试
+        if _x11_paste:
+            _x11_paste.cleanup()
+            _x11_paste = None
+        return False
+
+
+def is_available() -> bool:
+    """检查 X11 粘贴是否可用"""
+    return XLIB_AVAILABLE
