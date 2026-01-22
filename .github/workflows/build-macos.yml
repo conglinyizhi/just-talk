@@ -13,6 +13,17 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Get version
+        id: version
+        run: |
+          # 从 tag 获取版本号，或者从 pyproject.toml 读取
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -49,20 +60,19 @@ jobs:
 
       - name: Create DMG
         run: |
-          # 创建 DMG 安装包
           hdiutil create -volname "Just Talk" \
             -srcfolder "dist/Just Talk.app" \
             -ov -format UDZO \
-            "dist/just-talk-macos.dmg"
+            "dist/just-talk-macos-${{ steps.version.outputs.version }}.dmg"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: just-talk-macos
-          path: dist/just-talk-macos.dmg
+          name: just-talk-macos-${{ steps.version.outputs.version }}
+          path: dist/just-talk-macos-${{ steps.version.outputs.version }}.dmg
 
       - name: Upload to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/just-talk-macos.dmg
+          files: dist/just-talk-macos-${{ steps.version.outputs.version }}.dmg
