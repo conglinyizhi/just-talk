@@ -3,10 +3,8 @@ PIP_CACHE ?= $(HOME)/.cache/pip
 ARM_IMAGE ?= just-talk-linux-arm
 ARM_PLATFORM ?= linux/arm64
 PYINSTALLER_IMAGE ?= fydeinc/pyinstaller
-PYINSTALLER_PYPI_URL ?= https://pypi.tuna.tsinghua.edu.cn/
-PYINSTALLER_PYPI_INDEX_URL ?= https://pypi.tuna.tsinghua.edu.cn/simple
 WIN_BINARY_NAME ?= just-talk-win64
-WIN_PIP_ARGS ?= -i $(PYINSTALLER_PYPI_INDEX_URL) --trusted-host pypi.tuna.tsinghua.edu.cn
+WIN_PIP_ARGS ?= -i https://pypi.tuna.tsinghua.edu.cn/simple
 WIN_SHELL_CMDS ?= /usr/win64/bin/pip install $(WIN_PIP_ARGS) -U pyinstaller==6.18.0 pyinstaller-hooks-contrib
 WIN_ONEFILE ?= 1
 WIN_CONSOLE ?= 0
@@ -41,8 +39,6 @@ build-windows:
 		--entrypoint bash \
 		-v $(PWD):/src \
 		-v $(PIP_CACHE):/root/.cache/pip \
-		-e PIP_INDEX_URL=$(PYINSTALLER_PYPI_INDEX_URL) \
-		-e PIP_TRUSTED_HOST=pypi.tuna.tsinghua.edu.cn \
 		-e JT_BINARY_NAME=$(WIN_BINARY_NAME) \
 		-e JT_ICON=$(WIN_ICON) \
 		-e JT_ONEFILE=$(WIN_ONEFILE) \

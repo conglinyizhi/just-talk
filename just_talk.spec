@@ -127,6 +127,10 @@ a.binaries = [
 
 pyz = PYZ(a.pure, a.zipped_data)
 
+# Only strip on Linux (Wine doesn't have strip)
+import sys
+do_strip = sys.platform.startswith("linux")
+
 if onefile:
     exe = EXE(
         pyz,
@@ -138,7 +142,7 @@ if onefile:
         name=name,
         debug=False,
         bootloader_ignore_signals=False,
-        strip=True,  # Strip symbols to reduce size
+        strip=do_strip,
         upx=False,
         console=console,
         icon=icon_path,
@@ -151,7 +155,7 @@ else:
         name=name,
         debug=False,
         bootloader_ignore_signals=False,
-        strip=True,
+        strip=do_strip,
         upx=False,
         console=console,
         exclude_binaries=True,
@@ -162,7 +166,21 @@ else:
         a.binaries,
         a.zipfiles,
         a.datas,
-        strip=True,
+        strip=do_strip,
         upx=False,
         name=name,
     )
+
+    # macOS: 生成 .app bundle
+    if sys.platform == 'darwin':
+        app = BUNDLE(
+            coll,
+            name='Just Talk.app',
+            icon='icon.icns' if os.path.exists('icon.icns') else None,
+            bundle_identifier='com.justtalk.app',
+            info_plist={
+                'CFBundleShortVersionString': '0.1.3',
+                'NSMicrophoneUsageDescription': '需要麦克风权限进行语音识别',
+                'NSAppleEventsUsageDescription': '需要辅助功能权限实现全局快捷键',
+            },
+        )

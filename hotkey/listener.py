@@ -15,6 +15,7 @@ class HotkeyListenerThread(QThread):
     # Qt信号用于线程安全通信
     hotkey_pressed = pyqtSignal(str, str)  # (hotkey_id, action: "press"/"release"/"toggle")
     mouse_button_event = pyqtSignal(str, str)  # (button_id, action: "press"/"release")
+    snippet_triggered = pyqtSignal(str, str)  # (snippet_id, text)
     listener_error = pyqtSignal(str)
 
     def __init__(self, config: GlobalHotkeySettings) -> None:
@@ -170,6 +171,20 @@ class HotkeyListenerThread(QThread):
                             # toggle模式 - 发送toggle事件
                             self.hotkey_pressed.emit(hotkey_id, "toggle")
 
+            # 检查文本片段快捷键
+            for snip_id, snip_config in self._config.text_snippets.items():
+                if not snip_config.enabled:
+                    continue
+
+                required_keys = set(snip_config.keys)
+                # 精确匹配：按下的键必须完全等于配置的键
+                if required_keys == self._pressed_keys:
+                    # 片段快捷键触发（一次性，不需要跟踪active状态）
+                    snip_key = f"snippet:{snip_id}"
+                    if snip_key not in self._active_combos:
+                        self._active_combos[snip_key] = True
+                        self.snippet_triggered.emit(snip_id, snip_config.text)
+
         except Exception as e:
             self.listener_error.emit(f"按键处理错误: {e}")
 
@@ -198,6 +213,12 @@ class HotkeyListenerThread(QThread):
                     if config.mode == "hold":
                         # 按住模式 - 发送release事件
                         self.hotkey_pressed.emit(hotkey_id, "release")
+
+            # 清理片段快捷键的 active 状态
+            for snip_id, snip_config in self._config.text_snippets.items():
+                snip_key = f"snippet:{snip_id}"
+                if snip_key in self._active_combos and key_name in snip_config.keys:
+                    del self._active_combos[snip_key]
 
             self._pressed_keys.discard(key_name)
 

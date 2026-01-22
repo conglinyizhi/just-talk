@@ -5,7 +5,7 @@ from typing import Optional
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import Qt
 
-from hotkey.config import GlobalHotkeySettings, HotkeyConfig, MouseButtonConfig
+from hotkey.config import GlobalHotkeySettings, HotkeyConfig, MouseButtonConfig, TextSnippetConfig
 
 
 class HotkeySettingsDialog(QtWidgets.QDialog):
@@ -25,10 +25,12 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
         self._config = GlobalHotkeySettings(
             keyboard_hotkeys=current_config.keyboard_hotkeys.copy(),
             mouse_hotkeys=current_config.mouse_hotkeys.copy(),
+            text_snippets=current_config.text_snippets.copy(),
         )
 
         self._hotkey_widgets = {}
         self._mouse_widgets = {}
+        self._snippet_widgets = {}
 
         self._build_ui()
 
@@ -86,6 +88,39 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
             self._mouse_widgets["middle_button"] = middle_widget
 
         layout.addWidget(mouse_group)
+
+        # 文本片段部分
+        snippet_group = QtWidgets.QGroupBox("预设文本片段")
+        snippet_layout = QtWidgets.QVBoxLayout(snippet_group)
+        snippet_layout.setSpacing(10)
+
+        # 片段说明
+        snippet_info = QtWidgets.QLabel(
+            "配置快捷键直接输入预设文本，无需录音。"
+        )
+        snippet_info.setStyleSheet("color: #6b7280; font-size: 11px;")
+        snippet_layout.addWidget(snippet_info)
+
+        # 片段列表容器
+        self._snippets_container = QtWidgets.QWidget()
+        self._snippets_layout = QtWidgets.QVBoxLayout(self._snippets_container)
+        self._snippets_layout.setContentsMargins(0, 0, 0, 0)
+        self._snippets_layout.setSpacing(8)
+
+        # 加载现有片段
+        for snip_id, snip_config in self._config.text_snippets.items():
+            widget = self._create_snippet_widget(snip_id, snip_config)
+            self._snippets_layout.addWidget(widget)
+            self._snippet_widgets[snip_id] = widget
+
+        snippet_layout.addWidget(self._snippets_container)
+
+        # 添加新片段按钮
+        add_snippet_btn = QtWidgets.QPushButton("+ 添加片段")
+        add_snippet_btn.clicked.connect(self._add_snippet)
+        snippet_layout.addWidget(add_snippet_btn)
+
+        layout.addWidget(snippet_group)
 
         # 按钮行
         btn_layout = QtWidgets.QHBoxLayout()
@@ -199,6 +234,93 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
 
         return widget
 
+    def _create_snippet_widget(
+        self, snippet_id: str, config: TextSnippetConfig
+    ) -> QtWidgets.QWidget:
+        """创建文本片段配置部件"""
+        widget = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # 启用checkbox
+        enabled_cb = QtWidgets.QCheckBox()
+        enabled_cb.setChecked(config.enabled)
+        layout.addWidget(enabled_cb)
+
+        # 名称输入
+        name_edit = QtWidgets.QLineEdit()
+        name_edit.setText(config.name or snippet_id)
+        name_edit.setPlaceholderText("名称")
+        name_edit.setMaximumWidth(100)
+        layout.addWidget(name_edit)
+
+        # 快捷键按钮
+        keys_text = self._format_keys(config.keys) if config.keys else "设置快捷键"
+        keys_btn = QtWidgets.QPushButton(keys_text)
+        keys_btn.setMinimumWidth(120)
+        keys_btn.clicked.connect(
+            lambda: self._capture_snippet_hotkey(snippet_id, keys_btn, config.keys)
+        )
+        layout.addWidget(keys_btn)
+
+        # 文本内容输入
+        text_edit = QtWidgets.QLineEdit()
+        text_edit.setText(config.text)
+        text_edit.setPlaceholderText("要输入的文本内容")
+        text_edit.setMinimumWidth(150)
+        layout.addWidget(text_edit)
+
+        # 删除按钮
+        delete_btn = QtWidgets.QPushButton("删除")
+        delete_btn.setStyleSheet("color: #dc2626;")
+        delete_btn.clicked.connect(lambda: self._delete_snippet(snippet_id))
+        layout.addWidget(delete_btn)
+
+        # 保存引用
+        widget._enabled_cb = enabled_cb
+        widget._name_edit = name_edit
+        widget._keys_btn = keys_btn
+        widget._text_edit = text_edit
+        widget._current_keys = config.keys.copy()
+        widget._snippet_id = snippet_id
+
+        return widget
+
+    def _add_snippet(self) -> None:
+        """添加新的文本片段"""
+        import uuid
+        snippet_id = f"snippet_{uuid.uuid4().hex[:8]}"
+        config = TextSnippetConfig(
+            enabled=True,
+            keys=["ctrl", "shift", "1"],
+            text="",
+            name="新片段",
+        )
+        widget = self._create_snippet_widget(snippet_id, config)
+        self._snippets_layout.addWidget(widget)
+        self._snippet_widgets[snippet_id] = widget
+
+    def _capture_snippet_hotkey(
+        self, snippet_id: str, button: QtWidgets.QPushButton, current_keys: list
+    ) -> None:
+        """捕获片段快捷键"""
+        dialog = HotkeyCaptureDialog(current_keys, self)
+        if dialog.exec() == QtWidgets.QDialog.DialogCode.Accepted:
+            new_keys = dialog.get_captured_keys()
+            if new_keys:
+                button.setText(self._format_keys(new_keys))
+                widget = self._snippet_widgets.get(snippet_id)
+                if widget:
+                    widget._current_keys = new_keys
+
+    def _delete_snippet(self, snippet_id: str) -> None:
+        """删除片段"""
+        widget = self._snippet_widgets.get(snippet_id)
+        if widget:
+            self._snippets_layout.removeWidget(widget)
+            widget.deleteLater()
+            del self._snippet_widgets[snippet_id]
+
     def _format_keys(self, keys: list) -> str:
         """格式化按键列表为显示文本"""
         display_map = {
@@ -264,6 +386,22 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
                 button=old_config.button,  # 按钮类型不变
                 mode=widget._mode_combo.currentData(),
             )
+
+        # 收集文本片段配置
+        self._config.text_snippets = {}
+        for snip_id, widget in self._snippet_widgets.items():
+            text = widget._text_edit.text().strip()
+            if text:  # 只保存有文本内容的片段
+                try:
+                    self._config.text_snippets[snip_id] = TextSnippetConfig(
+                        enabled=widget._enabled_cb.isChecked(),
+                        keys=widget._current_keys,
+                        text=text,
+                        name=widget._name_edit.text().strip() or snip_id,
+                    )
+                except ValueError:
+                    # 跳过无效配置
+                    pass
 
         self.accept()
 

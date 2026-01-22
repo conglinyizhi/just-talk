@@ -1321,6 +1321,7 @@ class AsrController(QtCore.QObject):
             self.hotkey_manager = HotkeyManager(self)
             self.hotkey_manager.start_recording_requested.connect(self._on_hotkey_start_recording)
             self.hotkey_manager.stop_recording_requested.connect(self.stop_recognition)
+            self.hotkey_manager.snippet_triggered.connect(self._on_snippet_triggered)
             self.hotkey_manager.error_occurred.connect(self._on_hotkey_error)
 
             config = ConfigManager.load_config()
@@ -2716,6 +2717,11 @@ class AsrController(QtCore.QObject):
                 return True
             if self._wtype_path and self._wtype_type(text):
                 return True
+        # Windows: try native SendInput API first
+        if self._is_windows:
+            if self._windows_type_text(text):
+                self._mark_auto_submit_backend("win32:sendinput_type")
+                return True
         try:
             from pynput.keyboard import Controller
 
@@ -2749,6 +2755,12 @@ class AsrController(QtCore.QObject):
                 return
             if self._wtype_path and self._wtype_key(key_combo):
                 return
+        # Windows: try native Windows API first (WM_PASTE, then SendInput)
+        if self._is_windows:
+            method = self._windows_send_paste()
+            if method:
+                self._mark_auto_submit_backend(f"win32:{method}")
+                return
         try:
             if not self._send_key_combo_pynput(key_combo):
                 fallback = self._default_paste_keys()
@@ -2756,6 +2768,157 @@ class AsrController(QtCore.QObject):
             self._mark_auto_submit_backend("pynput:paste")
         except Exception:
             pass
+
+    def _windows_send_paste(self) -> Optional[str]:
+        """Send paste using Windows API. Returns method name on success, None on failure.
+
+        First tries WM_PASTE message (more reliable for text controls),
+        then falls back to SendInput Ctrl+V.
+        """
+        if not self._is_windows:
+            return None
+
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+
+        # Try WM_PASTE first
+        try:
+            WM_PASTE = 0x0302
+
+            # Get focus window
+            hwnd = user32.GetFocus()
+            if not hwnd:
+                # No focus in current thread, try to get from foreground window
+                fg_hwnd = user32.GetForegroundWindow()
+                if fg_hwnd:
+                    # Attach to the foreground window's thread to get its focus
+                    thread_id = user32.GetWindowThreadProcessId(fg_hwnd, None)
+                    current_thread = kernel32.GetCurrentThreadId()
+                    if user32.AttachThreadInput(current_thread, thread_id, True):
+                        hwnd = user32.GetFocus()
+                        user32.AttachThreadInput(current_thread, thread_id, False)
+
+            if hwnd:
+                # SendMessageW returns 0 for WM_PASTE but that's not an error
+                user32.SendMessageW(hwnd, WM_PASTE, 0, 0)
+                # Small delay to ensure the target application processes the paste
+                import time
+                time.sleep(0.05)
+                self._log("WIN32", "WM_PASTE sent successfully")
+                return "wm_paste"
+        except Exception as e:
+            self._log("WIN32", f"WM_PASTE failed: {e}")
+
+        # Fall back to SendInput Ctrl+V
+        try:
+            # Virtual key codes
+            VK_CONTROL = 0x11
+            VK_V = 0x56
+
+            # Input type
+            INPUT_KEYBOARD = 1
+            KEYEVENTF_KEYUP = 0x0002
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", wintypes.WORD),
+                    ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                ]
+
+            class INPUT(ctypes.Structure):
+                class _INPUT(ctypes.Union):
+                    _fields_ = [("ki", KEYBDINPUT)]
+
+                _anonymous_ = ("_input",)
+                _fields_ = [
+                    ("type", wintypes.DWORD),
+                    ("_input", _INPUT),
+                ]
+
+            def make_key_input(vk: int, up: bool = False) -> INPUT:
+                inp = INPUT(type=INPUT_KEYBOARD)
+                inp.ki.wVk = vk
+                inp.ki.dwFlags = KEYEVENTF_KEYUP if up else 0
+                return inp
+
+            # Ctrl down, V down, V up, Ctrl up
+            inputs = [
+                make_key_input(VK_CONTROL, False),
+                make_key_input(VK_V, False),
+                make_key_input(VK_V, True),
+                make_key_input(VK_CONTROL, True),
+            ]
+            arr = (INPUT * len(inputs))(*inputs)
+            result = user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+            if result == len(inputs):
+                return "sendinput"
+        except Exception as e:
+            self._log("WIN32", f"SendInput failed: {e}")
+
+        return None
+
+    def _windows_type_text(self, text: str) -> bool:
+        """Type text using Windows SendInput API with Unicode characters."""
+        if not self._is_windows:
+            return False
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            user32 = ctypes.windll.user32
+
+            INPUT_KEYBOARD = 1
+            KEYEVENTF_UNICODE = 0x0004
+            KEYEVENTF_KEYUP = 0x0002
+
+            class KEYBDINPUT(ctypes.Structure):
+                _fields_ = [
+                    ("wVk", wintypes.WORD),
+                    ("wScan", wintypes.WORD),
+                    ("dwFlags", wintypes.DWORD),
+                    ("time", wintypes.DWORD),
+                    ("dwExtraInfo", ctypes.POINTER(ctypes.c_ulong)),
+                ]
+
+            class INPUT(ctypes.Structure):
+                class _INPUT(ctypes.Union):
+                    _fields_ = [("ki", KEYBDINPUT)]
+
+                _anonymous_ = ("_input",)
+                _fields_ = [
+                    ("type", wintypes.DWORD),
+                    ("_input", _INPUT),
+                ]
+
+            inputs = []
+            for char in text:
+                code = ord(char)
+                # Key down
+                inp_down = INPUT(type=INPUT_KEYBOARD)
+                inp_down.ki.wScan = code
+                inp_down.ki.dwFlags = KEYEVENTF_UNICODE
+                inputs.append(inp_down)
+                # Key up
+                inp_up = INPUT(type=INPUT_KEYBOARD)
+                inp_up.ki.wScan = code
+                inp_up.ki.dwFlags = KEYEVENTF_UNICODE | KEYEVENTF_KEYUP
+                inputs.append(inp_up)
+
+            if not inputs:
+                return True
+
+            arr = (INPUT * len(inputs))(*inputs)
+            result = user32.SendInput(len(inputs), arr, ctypes.sizeof(INPUT))
+            return result == len(inputs)
+        except Exception as e:
+            self._log("WIN32", f"SendInput type failed: {e}")
+            return False
 
     def _default_paste_keys(self) -> str:
         return "cmd+v" if self._is_mac else "ctrl+v"
@@ -3048,6 +3211,20 @@ class AsrController(QtCore.QObject):
 
     def _on_hotkey_error(self, error_msg: str) -> None:
         QtWidgets.QMessageBox.warning(None, "快捷键错误", error_msg)
+
+    def _on_snippet_triggered(self, snippet_id: str, text: str) -> None:
+        """处理文本片段快捷键触发"""
+        self._log("SNIPPET", f"Triggered snippet '{snippet_id}': {text[:50]}...")
+        # 复制文本到剪贴板并粘贴
+        clipboard = QtWidgets.QApplication.clipboard()
+        if clipboard:
+            clipboard.setText(text)
+            # 延迟一小段时间确保剪贴板内容已设置
+            QtCore.QTimer.singleShot(50, self._paste_snippet)
+
+    def _paste_snippet(self) -> None:
+        """粘贴文本片段"""
+        self._send_paste_key()
 
     def _on_hotkey_start_recording(self, mode: str) -> None:
         # 热键触发时保存模式用于后续连接成功后显示

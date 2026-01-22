@@ -14,6 +14,7 @@ class HotkeyManager(QObject):
     # 信号：请求开始/停止录音，附带模式信息
     start_recording_requested = pyqtSignal(str)  # 参数：mode ("hold" 或 "toggle")
     stop_recording_requested = pyqtSignal()
+    snippet_triggered = pyqtSignal(str, str)  # (snippet_id, text)
     error_occurred = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QObject] = None) -> None:
@@ -73,6 +74,7 @@ class HotkeyManager(QObject):
             self._listener_thread = HotkeyListenerThread(self._config)
             self._listener_thread.hotkey_pressed.connect(self._on_hotkey_event)
             self._listener_thread.mouse_button_event.connect(self._on_mouse_event)
+            self._listener_thread.snippet_triggered.connect(self._on_snippet_triggered)
             self._listener_thread.listener_error.connect(self._on_listener_error)
             self._listener_thread.start()
         except Exception as e:
@@ -143,6 +145,12 @@ class HotkeyManager(QObject):
     def _on_listener_error(self, error_msg: str) -> None:
         """处理监听器错误"""
         self.error_occurred.emit(error_msg)
+
+    def _on_snippet_triggered(self, snippet_id: str, text: str) -> None:
+        """处理文本片段快捷键触发"""
+        if not self._enabled or self._suspended:
+            return
+        self.snippet_triggered.emit(snippet_id, text)
 
     def reset_state(self) -> None:
         """重置录音状态（用于错误恢复）"""

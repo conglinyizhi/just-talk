@@ -37,11 +37,29 @@ class MouseButtonConfig:
 
 
 @dataclass
+class TextSnippetConfig:
+    """预设文本片段配置"""
+
+    enabled: bool
+    keys: List[str]  # 快捷键组合，如 ["ctrl", "shift", "1"]
+    text: str  # 要输入的文本内容
+    name: str = ""  # 片段名称（可选，用于UI显示）
+
+    def __post_init__(self) -> None:
+        """验证配置"""
+        if not self.keys:
+            raise ValueError("Keys list cannot be empty")
+        if not self.text:
+            raise ValueError("Text cannot be empty")
+
+
+@dataclass
 class GlobalHotkeySettings:
     """完整快捷键设置"""
 
     keyboard_hotkeys: Dict[str, HotkeyConfig] = field(default_factory=dict)
     mouse_hotkeys: Dict[str, MouseButtonConfig] = field(default_factory=dict)
+    text_snippets: Dict[str, TextSnippetConfig] = field(default_factory=dict)
 
     @classmethod
     def get_defaults(cls) -> "GlobalHotkeySettings":
@@ -60,6 +78,7 @@ class GlobalHotkeySettings:
                     enabled=False, button="middle", mode="hold"
                 )
             },
+            text_snippets={},
         )
 
     def to_dict(self) -> dict:
@@ -81,6 +100,15 @@ class GlobalHotkeySettings:
                 }
                 for mb_id, mb in self.mouse_hotkeys.items()
             },
+            "text_snippets": {
+                snip_id: {
+                    "enabled": snip.enabled,
+                    "keys": snip.keys,
+                    "text": snip.text,
+                    "name": snip.name,
+                }
+                for snip_id, snip in self.text_snippets.items()
+            },
         }
 
     @classmethod
@@ -96,4 +124,13 @@ class GlobalHotkeySettings:
             for mb_id, mb_data in data.get("mouse_hotkeys", {}).items()
         }
 
-        return cls(keyboard_hotkeys=keyboard_hotkeys, mouse_hotkeys=mouse_hotkeys)
+        text_snippets = {
+            snip_id: TextSnippetConfig(**snip_data)
+            for snip_id, snip_data in data.get("text_snippets", {}).items()
+        }
+
+        return cls(
+            keyboard_hotkeys=keyboard_hotkeys,
+            mouse_hotkeys=mouse_hotkeys,
+            text_snippets=text_snippets,
+        )
