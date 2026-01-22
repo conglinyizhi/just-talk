@@ -1,0 +1,70 @@
+name: Build Windows
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            VERSION="${GITHUB_REF#refs/tags/v}"
+          else
+            VERSION=$(grep -m1 'version = ' pyproject.toml | cut -d'"' -f2)
+          fi
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv sync --frozen --extra build
+
+      - name: Convert icon to ico
+        shell: pwsh
+        run: |
+          if ((Test-Path icon.png) -and (-not (Test-Path icon.ico))) {
+            # Use ImageMagick if available, otherwise skip
+            $magick = Get-Command magick -ErrorAction SilentlyContinue
+            if ($magick) {
+              magick icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
+            }
+          }
+
+      - name: Build with PyInstaller
+        shell: bash
+        run: |
+          JT_BINARY_NAME=just-talk-win64 JT_ONEFILE=1 JT_CONSOLE=0 JT_ICON=icon.ico \
+            uv run pyinstaller just_talk.spec
+
+      - name: Rename executable
+        shell: bash
+        run: |
+          mv "dist/just-talk-win64.exe" "dist/just-talk-${{ steps.version.outputs.version }}-win64.exe"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: just-talk-win64-${{ steps.version.outputs.version }}
+          path: dist/just-talk-${{ steps.version.outputs.version }}-win64.exe
+
+      - name: Upload to Release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/just-talk-${{ steps.version.outputs.version }}-win64.exe
