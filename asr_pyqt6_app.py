@@ -2647,8 +2647,22 @@ class AsrController(QtCore.QObject):
         self._show_indicator_mode(self._indicator_mode or self._primary_hotkey_mode)
 
         # Decide which audio backend to use
-        use_qt = _qt_audio_input_available()
-        use_sd = _HAS_SOUNDDEVICE and not use_qt
+        # macOS: prefer sounddevice due to Qt6 QAudioSource issues (readyRead not firing)
+        # Linux: use sounddevice when Qt backend unavailable (PyPI PyQt6 FFmpeg limitation)
+        # Windows: use Qt backend
+        use_sd = False
+        use_qt = False
+
+        if sys.platform == "darwin" and _HAS_SOUNDDEVICE:
+            # macOS: prefer sounddevice for reliability
+            use_sd = True
+            self._log("MIC", "macOS: using sounddevice backend")
+        elif _qt_audio_input_available():
+            # Qt backend available and working
+            use_qt = True
+        elif _HAS_SOUNDDEVICE:
+            # Fallback to sounddevice (e.g., Linux with PyPI PyQt6)
+            use_sd = True
 
         if not use_qt and not use_sd:
             self._log("MIC", "No audio backend available")
@@ -2708,7 +2722,7 @@ class AsrController(QtCore.QObject):
         self._finalize_mic_start()
 
     def _start_mic_sounddevice(self) -> None:
-        """Start microphone using sounddevice backend (Linux fallback)."""
+        """Start microphone using sounddevice backend (macOS preferred, Linux fallback)."""
         if _sounddevice is None:
             return
         self._log("MIC", "Using sounddevice backend")
