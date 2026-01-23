@@ -1986,16 +1986,22 @@ class AsrController(QtCore.QObject):
             key = key[5:]
 
         if key in ("ctrl", "control"):
-            label = "Ctrl"
+            if self._is_mac:
+                label = "Control"
+            else:
+                label = "Ctrl"
         elif key in ("alt", "option"):
-            label = "Alt"
+            if self._is_mac:
+                label = "Option"
+            else:
+                label = "Alt"
         elif key in ("shift",):
             label = "Shift"
         elif key in ("super", "win", "cmd", "command"):
             if self._is_windows:
                 label = "Win"
             elif self._is_mac:
-                label = "Cmd"
+                label = "Command"
             else:
                 label = "Super"
         else:
