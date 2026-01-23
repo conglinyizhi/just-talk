@@ -104,6 +104,8 @@ jobs:
           SELF=$(readlink -f "$0")
           HERE=${SELF%/*}
           export PATH="${HERE}/usr/bin:${PATH}"
+          # Workaround for GLX compatibility issues across different distros
+          export QT_XCB_GL_INTEGRATION="${QT_XCB_GL_INTEGRATION:-none}"
           exec "${HERE}/usr/bin/just-talk" "$@"
           APPRUN
           chmod +x AppDir/AppRun
@@ -112,9 +114,12 @@ jobs:
           ARCH=x86_64 ./appimagetool-x86_64.AppImage AppDir \
             "dist/just-talk-${{ steps.version.outputs.version }}-x86_64.AppImage"
 
-      - name: Rename binary
+      - name: Rename binary and generate checksums
         run: |
           mv dist/just-talk-x86_64 "dist/just-talk-${{ steps.version.outputs.version }}-x86_64"
+          cd dist
+          sha256sum "just-talk-${{ steps.version.outputs.version }}-x86_64" > "just-talk-${{ steps.version.outputs.version }}-x86_64.sha256"
+          sha256sum "just-talk-${{ steps.version.outputs.version }}-x86_64.AppImage" > "just-talk-${{ steps.version.outputs.version }}-x86_64.AppImage.sha256"
 
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
@@ -135,4 +140,6 @@ jobs:
           tag_name: v${{ steps.version.outputs.version }}
           files: |
             dist/just-talk-${{ steps.version.outputs.version }}-x86_64
+            dist/just-talk-${{ steps.version.outputs.version }}-x86_64.sha256
             dist/just-talk-${{ steps.version.outputs.version }}-x86_64.AppImage
+            dist/just-talk-${{ steps.version.outputs.version }}-x86_64.AppImage.sha256

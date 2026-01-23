@@ -18,20 +18,27 @@ PY
 
 # AppImage 文件名格式
 appimage="just-talk-${version}-x86_64.AppImage"
+sha256_url="https://github.com/whoamihappyhacking/just-talk/releases/download/v${version}/${appimage}.sha256"
 release_url="https://github.com/whoamihappyhacking/just-talk/releases/download/v${version}/${appimage}"
 
-# 下载 AppImage 并计算 sha256
-echo "Downloading ${appimage} to calculate sha256..."
-tmpfile="$(mktemp)"
-if ! curl -fsSL -o "$tmpfile" "$release_url"; then
-  echo "Failed to download ${release_url}" >&2
-  echo "Make sure v${version} release exists with the AppImage file" >&2
+# 尝试下载 sha256 文件
+echo "Fetching sha256 for ${appimage}..."
+if sha256_content="$(curl -fsSL "$sha256_url" 2>/dev/null)"; then
+  sha256="$(echo "$sha256_content" | awk '{print $1}')"
+  echo "Got sha256 from release: ${sha256}"
+else
+  # 回退：下载 AppImage 并计算 sha256
+  echo "sha256 file not found, downloading ${appimage} to calculate..."
+  tmpfile="$(mktemp)"
+  if ! curl -fsSL -o "$tmpfile" "$release_url"; then
+    echo "Failed to download ${release_url}" >&2
+    echo "Make sure v${version} release exists with the AppImage file" >&2
+    rm -f "$tmpfile"
+    exit 1
+  fi
+  sha256="$(sha256sum "$tmpfile" | awk '{print $1}')"
   rm -f "$tmpfile"
-  exit 1
 fi
-
-sha256="$(sha256sum "$tmpfile" | awk '{print $1}')"
-rm -f "$tmpfile"
 
 echo "Version: ${version}"
 echo "SHA256: ${sha256}"
@@ -49,7 +56,8 @@ sha256 = "${sha256}"
 path = Path("${aur_dir}/PKGBUILD")
 text = path.read_text(encoding="utf-8")
 text = re.sub(r"^pkgver=.*$", f"pkgver={version}", text, flags=re.M)
-text = re.sub(r"^sha256sums=\('[0-9a-f]+'\)$", f"sha256sums=('{sha256}')", text, flags=re.M)
+# Update first sha256sum (AppImage)
+text = re.sub(r"^(sha256sums=\(\n  ')[0-9a-f]+(')", f"\\g<1>{sha256}\\2", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
   echo "Updated PKGBUILD"
@@ -67,7 +75,8 @@ path = Path("${aur_dir}/.SRCINFO")
 text = path.read_text(encoding="utf-8")
 text = re.sub(r"^\tpkgver = .*$", f"\tpkgver = {version}", text, flags=re.M)
 text = re.sub(r"just-talk-[0-9.]+-x86_64\.AppImage", f"just-talk-{version}-x86_64.AppImage", text)
-text = re.sub(r"^\tsha256sums = [0-9a-f]+$", f"\tsha256sums = {sha256}", text, flags=re.M)
+# Update first sha256sum only (AppImage)
+text = re.sub(r"^(\tsha256sums = )[0-9a-f]+$", f"\\g<1>{sha256}", text, count=1, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
   echo "Updated .SRCINFO"
