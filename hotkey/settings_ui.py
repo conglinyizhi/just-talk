@@ -524,18 +524,15 @@ class HotkeyCaptureDialog(QtWidgets.QDialog):
 
     def _update_from_modifiers(self, modifiers: Qt.KeyboardModifier) -> None:
         """从修饰键状态更新当前按下的键"""
-        # 在 macOS 上，Qt 交换了 Control 和 Meta
-        if _IS_MACOS:
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
-                self._current_keys.add("super")  # Command
-            if modifiers & Qt.KeyboardModifier.MetaModifier:
-                self._current_keys.add("ctrl")  # Control
-        else:
-            if modifiers & Qt.KeyboardModifier.ControlModifier:
-                self._current_keys.add("ctrl")
-            if modifiers & Qt.KeyboardModifier.MetaModifier:
-                self._current_keys.add("super")
-
+        # macOS 和其他平台使用相同的映射
+        # Qt 在所有平台上报告方式一致：
+        # - ControlModifier = Control 键 (macOS) / Ctrl 键 (其他)
+        # - MetaModifier = Command 键 (macOS) / Super/Win 键 (其他)
+        # - AltModifier = Option 键 (macOS) / Alt 键 (其他)
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            self._current_keys.add("ctrl")
+        if modifiers & Qt.KeyboardModifier.MetaModifier:
+            self._current_keys.add("super")
         if modifiers & Qt.KeyboardModifier.AltModifier:
             self._current_keys.add("alt")
         if modifiers & Qt.KeyboardModifier.ShiftModifier:
