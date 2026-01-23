@@ -14,14 +14,57 @@ ICON_CONVERT ?= $(shell command -v convert 2>/dev/null || command -v magick 2>/d
 FIX_PERMS ?= 1
 CHOWN ?= sudo chown
 CHOWN_USER ?= $(shell id -u):$(shell id -g)
+APPIMAGETOOL ?= appimagetool-x86_64.AppImage
+APPIMAGETOOL_URL ?= https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
+VERSION ?= $(shell python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
 
-.PHONY: sync build-linux build-windows build-all clean-dist
+.PHONY: sync build-linux build-appimage build-windows build-all clean-dist
 
 sync:
 	$(UV) sync --frozen --extra build
 
 build-linux: sync
-	JT_BINARY_NAME=just-talk-x86_64 $(UV) run pyinstaller just_talk.spec
+	JT_BINARY_NAME=just-talk-x86_64 JT_ONEFILE=1 $(UV) run pyinstaller just_talk.spec
+
+build-appimage: build-linux
+	@# Download appimagetool if not exists
+	@if [ ! -f "$(APPIMAGETOOL)" ]; then \
+		echo "Downloading appimagetool..."; \
+		wget -q "$(APPIMAGETOOL_URL)" -O "$(APPIMAGETOOL)"; \
+		chmod +x "$(APPIMAGETOOL)"; \
+	fi
+	@# Create AppDir structure
+	rm -rf AppDir
+	mkdir -p AppDir/usr/bin
+	mkdir -p AppDir/usr/share/applications
+	mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+	@# Copy binary
+	cp dist/just-talk-x86_64 AppDir/usr/bin/just-talk
+	@# Copy icon
+	@if [ -f icon.png ]; then \
+		cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/just-talk.png; \
+		cp icon.png AppDir/just-talk.png; \
+	fi
+	@# Create desktop file
+	@echo '[Desktop Entry]' > AppDir/just-talk.desktop
+	@echo 'Type=Application' >> AppDir/just-talk.desktop
+	@echo 'Name=Just Talk' >> AppDir/just-talk.desktop
+	@echo 'Exec=just-talk' >> AppDir/just-talk.desktop
+	@echo 'Icon=just-talk' >> AppDir/just-talk.desktop
+	@echo 'Terminal=false' >> AppDir/just-talk.desktop
+	@echo 'Categories=AudioVideo;Audio;' >> AppDir/just-talk.desktop
+	@echo 'Comment=Speech recognition with global hotkey support' >> AppDir/just-talk.desktop
+	cp AppDir/just-talk.desktop AppDir/usr/share/applications/
+	@# Create AppRun
+	@echo '#!/bin/bash' > AppDir/AppRun
+	@echo 'SELF=$$(readlink -f "$$0")' >> AppDir/AppRun
+	@echo 'HERE=$${SELF%/*}' >> AppDir/AppRun
+	@echo 'export PATH="$${HERE}/usr/bin:$${PATH}"' >> AppDir/AppRun
+	@echo 'exec "$${HERE}/usr/bin/just-talk" "$$@"' >> AppDir/AppRun
+	chmod +x AppDir/AppRun
+	@# Build AppImage
+	ARCH=x86_64 ./$(APPIMAGETOOL) AppDir "dist/just-talk-$(VERSION)-x86_64.AppImage"
+	@echo "AppImage created: dist/just-talk-$(VERSION)-x86_64.AppImage"
 
 release-linux:
 	./scripts/release-linux.sh
