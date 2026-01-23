@@ -2599,20 +2599,44 @@ class AsrController(QtCore.QObject):
 
     def _on_mic_permission_result(self, permission: "QPermission") -> None:
         """macOS 麦克风权限请求回调"""
-        app = QtWidgets.QApplication.instance()
-        if app is None:
-            return
-        status = app.checkPermission(permission)
-        if status == QtCore.Qt.PermissionStatus.Granted:
-            self._log("MIC", "Microphone permission granted")
-            self._start_mic()  # 重新尝试启动麦克风
-        else:
-            self._log("MIC", f"Microphone permission not granted: {status}")
-            QtWidgets.QMessageBox.warning(
-                None,
-                "麦克风权限",
-                "麦克风权限未授予，无法进行语音识别。",
-            )
+        try:
+            app = QtWidgets.QApplication.instance()
+            if app is None:
+                return
+            status = app.checkPermission(permission)
+            if status == QtCore.Qt.PermissionStatus.Granted:
+                self._log("MIC", "Microphone permission granted")
+                # 使用 QTimer 延迟启动，避免在权限回调中直接初始化音频导致崩溃
+                QtCore.QTimer.singleShot(100, self._start_mic_safe)
+            else:
+                self._log("MIC", f"Microphone permission not granted: {status}")
+                QtWidgets.QMessageBox.warning(
+                    None,
+                    "麦克风权限",
+                    "麦克风权限未授予，无法进行语音识别。",
+                )
+        except Exception as e:
+            self._handle_mic_error("权限回调处理失败", e)
+
+    def _start_mic_safe(self) -> None:
+        """安全启动麦克风，带完整异常捕获"""
+        try:
+            self._start_mic()
+        except Exception as e:
+            self._handle_mic_error("启动麦克风失败", e)
+
+    def _handle_mic_error(self, context: str, error: Exception) -> None:
+        """统一处理麦克风相关错误"""
+        import traceback
+        error_details = traceback.format_exc()
+        error_msg = f"{context}: {error}\n\n{error_details}"
+
+        # 写入日志文件
+        LOG.error(error_msg)
+        self._log("MIC", f"ERROR: {context}: {error}")
+
+        # 显示可复制的错误对话框
+        self._show_error_dialog(context, str(error), error_details)
 
     def _start_mic(self) -> None:
         if self._sending or not self._connected:
@@ -2677,6 +2701,13 @@ class AsrController(QtCore.QObject):
 
     def _start_mic_qt(self) -> None:
         """Start microphone using Qt multimedia backend."""
+        try:
+            self._start_mic_qt_impl()
+        except Exception as e:
+            self._handle_mic_error("Qt 音频后端启动失败", e)
+
+    def _start_mic_qt_impl(self) -> None:
+        """Qt 音频后端实际实现"""
         audio_inputs = QMediaDevices.audioInputs()
         device = QMediaDevices.defaultAudioInput()
         if device is None or device.isNull():
@@ -2723,6 +2754,13 @@ class AsrController(QtCore.QObject):
 
     def _start_mic_sounddevice(self) -> None:
         """Start microphone using sounddevice backend (macOS preferred, Linux fallback)."""
+        try:
+            self._start_mic_sounddevice_impl()
+        except Exception as e:
+            self._handle_mic_error("sounddevice 音频后端启动失败", e)
+
+    def _start_mic_sounddevice_impl(self) -> None:
+        """sounddevice 音频后端实际实现"""
         if _sounddevice is None:
             return
         self._log("MIC", "Using sounddevice backend")
@@ -2742,17 +2780,13 @@ class AsrController(QtCore.QObject):
                 QtCore.Q_ARG(bytes, raw),
             )
 
-        try:
-            self._sd_stream = _sounddevice.InputStream(
-                samplerate=16000, channels=1, dtype="int16",
-                blocksize=int(16000 * self.CHUNK_MS_DEFAULT / 1000),
-                callback=audio_callback,
-            )
-            self._sd_stream.start()
-            self._finalize_mic_start()
-        except Exception as e:
-            self._log("MIC", f"sounddevice error: {e}")
-            QtWidgets.QMessageBox.critical(None, "错误", f"无法启动麦克风: {e}")
+        self._sd_stream = _sounddevice.InputStream(
+            samplerate=16000, channels=1, dtype="int16",
+            blocksize=int(16000 * self.CHUNK_MS_DEFAULT / 1000),
+            callback=audio_callback,
+        )
+        self._sd_stream.start()
+        self._finalize_mic_start()
 
     def _finalize_mic_start(self) -> None:
         """Common finalization after mic start."""
@@ -3484,6 +3518,28 @@ class AsrController(QtCore.QObject):
 
     def _log(self, tag: str, msg: str) -> None:
         print(f"[{tag}] {msg}")
+        LOG.info(f"[{tag}] {msg}")
+
+    def _show_error_dialog(self, title: str, brief: str, details: str) -> None:
+        """显示可复制错误详情的对话框"""
+        dialog = QtWidgets.QMessageBox()
+        dialog.setIcon(QtWidgets.QMessageBox.Icon.Critical)
+        dialog.setWindowTitle("错误")
+        dialog.setText(title)
+        dialog.setInformativeText(brief)
+        dialog.setDetailedText(details)
+        dialog.setStandardButtons(QtWidgets.QMessageBox.StandardButton.Ok)
+
+        # 添加复制按钮
+        copy_btn = dialog.addButton("复制错误信息", QtWidgets.QMessageBox.ButtonRole.ActionRole)
+
+        dialog.exec()
+
+        if dialog.clickedButton() == copy_btn:
+            clipboard = QtWidgets.QApplication.clipboard()
+            if clipboard:
+                full_error = f"{title}\n\n{brief}\n\n详细信息:\n{details}"
+                clipboard.setText(full_error)
 
     def _force_close(self) -> None:
         self._connecting = False

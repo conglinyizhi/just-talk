@@ -1,11 +1,15 @@
 """快捷键设置UI对话框"""
 
+import sys
 from typing import Optional
 
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import Qt
 
 from hotkey.config import GlobalHotkeySettings, HotkeyConfig, MouseButtonConfig, TextSnippetConfig
+
+# macOS 平台检测
+_IS_MACOS = sys.platform == "darwin"
 
 
 class HotkeySettingsDialog(QtWidgets.QDialog):
@@ -56,8 +60,12 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
         # 主快捷键
         primary_config = self._config.keyboard_hotkeys.get("primary")
         if primary_config:
+            if _IS_MACOS:
+                primary_label = "主快捷键（⌃Control+⌘Command 按住模式）"
+            else:
+                primary_label = "主快捷键（Ctrl+Super 按住模式）"
             primary_widget = self._create_hotkey_widget(
-                "primary", "主快捷键（Ctrl+Super 按住模式）", primary_config, True
+                "primary", primary_label, primary_config, True
             )
             kb_layout.addWidget(primary_widget)
             self._hotkey_widgets["primary"] = primary_widget
@@ -65,8 +73,12 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
         # 自由说模式
         freehand_config = self._config.keyboard_hotkeys.get("freehand")
         if freehand_config:
+            if _IS_MACOS:
+                freehand_label = "自由说模式（⌥Option 切换模式）"
+            else:
+                freehand_label = "自由说模式（Alt 切换模式）"
             freehand_widget = self._create_hotkey_widget(
-                "freehand", "自由说模式（Alt 切换模式）", freehand_config, False
+                "freehand", freehand_label, freehand_config, False
             )
             kb_layout.addWidget(freehand_widget)
             self._hotkey_widgets["freehand"] = freehand_widget
@@ -323,14 +335,24 @@ class HotkeySettingsDialog(QtWidgets.QDialog):
 
     def _format_keys(self, keys: list) -> str:
         """格式化按键列表为显示文本"""
-        display_map = {
-            "ctrl": "Ctrl",
-            "right_ctrl": "右Ctrl",
-            "super": "Super",
-            "alt": "Alt",
-            "shift": "Shift",
-            "space": "空格",
-        }
+        if _IS_MACOS:
+            display_map = {
+                "ctrl": "⌃ Control",
+                "right_ctrl": "右⌃",
+                "super": "⌘ Command",
+                "alt": "⌥ Option",
+                "shift": "⇧ Shift",
+                "space": "空格",
+            }
+        else:
+            display_map = {
+                "ctrl": "Ctrl",
+                "right_ctrl": "右Ctrl",
+                "super": "Super",
+                "alt": "Alt",
+                "shift": "Shift",
+                "space": "空格",
+            }
 
         return " + ".join(display_map.get(k, k.upper()) for k in keys)
 
@@ -513,13 +535,22 @@ class HotkeyCaptureDialog(QtWidgets.QDialog):
     def _update_preview(self) -> None:
         """更新预览显示"""
         if self._captured_keys:
-            display_map = {
-                "ctrl": "Ctrl",
-                "super": "Super",
-                "alt": "Alt",
-                "shift": "Shift",
-                "space": "空格",
-            }
+            if _IS_MACOS:
+                display_map = {
+                    "ctrl": "⌃ Control",
+                    "super": "⌘ Command",
+                    "alt": "⌥ Option",
+                    "shift": "⇧ Shift",
+                    "space": "空格",
+                }
+            else:
+                display_map = {
+                    "ctrl": "Ctrl",
+                    "super": "Super",
+                    "alt": "Alt",
+                    "shift": "Shift",
+                    "space": "空格",
+                }
             display = " + ".join(
                 display_map.get(k, k.upper()) for k in self._captured_keys
             )

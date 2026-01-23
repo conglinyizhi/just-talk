@@ -1,5 +1,6 @@
 """全局快捷键监听器线程"""
 
+import sys
 import threading
 import time
 from typing import Dict, Optional, Set
@@ -7,6 +8,9 @@ from typing import Dict, Optional, Set
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from hotkey.config import GlobalHotkeySettings
+
+# macOS 平台检测
+_IS_MACOS = sys.platform == "darwin"
 
 
 class HotkeyListenerThread(QThread):
@@ -67,7 +71,16 @@ class HotkeyListenerThread(QThread):
         except ImportError as e:
             self.listener_error.emit(f"无法导入pynput库: {e}\n请运行: pip install pynput")
         except Exception as e:
-            self.listener_error.emit(f"启动监听器失败: {e}")
+            error_msg = str(e)
+            # macOS 辅助功能权限错误的特殊处理
+            if _IS_MACOS and ("accessibility" in error_msg.lower() or "trusted" in error_msg.lower()):
+                self.listener_error.emit(
+                    "全局快捷键需要辅助功能权限。\n\n"
+                    "请打开「系统设置 → 隐私与安全性 → 辅助功能」，\n"
+                    "然后允许本应用控制您的电脑。"
+                )
+            else:
+                self.listener_error.emit(f"启动监听器失败: {e}")
         finally:
             # 清理
             if self._keyboard_listener:

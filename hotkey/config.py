@@ -1,7 +1,11 @@
 """配置数据结构定义"""
 
+import sys
 from dataclasses import dataclass, field
 from typing import Dict, List
+
+# macOS 平台检测
+_IS_MACOS = sys.platform == "darwin"
 
 
 @dataclass
@@ -64,22 +68,42 @@ class GlobalHotkeySettings:
     @classmethod
     def get_defaults(cls) -> "GlobalHotkeySettings":
         """创建默认配置"""
-        return cls(
-            keyboard_hotkeys={
-                "primary": HotkeyConfig(
-                    enabled=True, keys=["ctrl", "super"], mode="hold"
-                ),
-                "freehand": HotkeyConfig(
-                    enabled=True, keys=["alt", "super"], mode="toggle"
-                ),
-            },
-            mouse_hotkeys={
-                "middle_button": MouseButtonConfig(
-                    enabled=False, button="middle", mode="hold"
-                )
-            },
-            text_snippets={},
-        )
+        if _IS_MACOS:
+            # macOS: Control+Command 按住, Option+Command 切换
+            return cls(
+                keyboard_hotkeys={
+                    "primary": HotkeyConfig(
+                        enabled=True, keys=["ctrl", "super"], mode="hold"
+                    ),
+                    "freehand": HotkeyConfig(
+                        enabled=True, keys=["alt", "super"], mode="toggle"
+                    ),
+                },
+                mouse_hotkeys={
+                    "middle_button": MouseButtonConfig(
+                        enabled=False, button="middle", mode="hold"
+                    )
+                },
+                text_snippets={},
+            )
+        else:
+            # Linux/Windows: Ctrl+Super 按住, Alt+Super 切换
+            return cls(
+                keyboard_hotkeys={
+                    "primary": HotkeyConfig(
+                        enabled=True, keys=["ctrl", "super"], mode="hold"
+                    ),
+                    "freehand": HotkeyConfig(
+                        enabled=True, keys=["alt", "super"], mode="toggle"
+                    ),
+                },
+                mouse_hotkeys={
+                    "middle_button": MouseButtonConfig(
+                        enabled=False, button="middle", mode="hold"
+                    )
+                },
+                text_snippets={},
+            )
 
     def to_dict(self) -> dict:
         """转换为字典（用于序列化）"""
