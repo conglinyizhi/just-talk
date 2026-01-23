@@ -1,10 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-build=1
-if [ "${1:-}" = "--no-build" ]; then
-  build=0
-fi
+# 此脚本用于更新 AUR 的 PKGBUILD 和 .SRCINFO 文件
+# 使用 GitHub Release 上的 AppImage 文件
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -18,41 +16,30 @@ print(data["project"]["version"])
 PY
 )"
 
-binary="dist/just-talk-x86_64"
-if [ $build -eq 1 ] && [ ! -x "$binary" ]; then
-  if command -v make >/dev/null 2>&1; then
-    make build-linux
-  else
-    echo "make not found; run pyinstaller manually first" >&2
-    exit 1
-  fi
-fi
+# AppImage 文件名格式
+appimage="just-talk-${version}-x86_64.AppImage"
+release_url="https://github.com/whoamihappyhacking/just-talk/releases/download/v${version}/${appimage}"
 
-if [ ! -x "$binary" ]; then
-  echo "Binary not found at $binary" >&2
+# 下载 AppImage 并计算 sha256
+echo "Downloading ${appimage} to calculate sha256..."
+tmpfile="$(mktemp)"
+if ! curl -fsSL -o "$tmpfile" "$release_url"; then
+  echo "Failed to download ${release_url}" >&2
+  echo "Make sure v${version} release exists with the AppImage file" >&2
+  rm -f "$tmpfile"
   exit 1
 fi
 
-release_dir="release"
-pkg="just-talk-linux-x86_64-v${version}.tar.zst"
-mkdir -p "$release_dir"
+sha256="$(sha256sum "$tmpfile" | awk '{print $1}')"
+rm -f "$tmpfile"
 
-if ! command -v zstd >/dev/null 2>&1; then
-  echo "zstd not found; install zstd to build the release archive" >&2
-  exit 1
-fi
-
-tmpdir="$(mktemp -d)"
-cp "$binary" "$tmpdir/just-talk"
-cp icon.png just-talk.desktop LICENSE "$tmpdir/"
-tar -cf - -C "$tmpdir" just-talk icon.png just-talk.desktop LICENSE | zstd -19 -T0 -f -o "${release_dir}/${pkg}"
-rm -rf "$tmpdir"
-
-sha256="$(sha256sum "${release_dir}/${pkg}" | awk '{print $1}')"
+echo "Version: ${version}"
+echo "SHA256: ${sha256}"
 
 aur_dir="${repo_root}/../just-talk-aur"
 
 if [ -f "${aur_dir}/PKGBUILD" ]; then
+  echo "Updating ${aur_dir}/PKGBUILD..."
   python - <<PY
 from pathlib import Path
 import re
@@ -65,9 +52,11 @@ text = re.sub(r"^pkgver=.*$", f"pkgver={version}", text, flags=re.M)
 text = re.sub(r"^sha256sums=\('[0-9a-f]+'\)$", f"sha256sums=('{sha256}')", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
+  echo "Updated PKGBUILD"
 fi
 
 if [ -f "${aur_dir}/.SRCINFO" ]; then
+  echo "Updating ${aur_dir}/.SRCINFO..."
   python - <<PY
 from pathlib import Path
 import re
@@ -77,10 +66,11 @@ sha256 = "${sha256}"
 path = Path("${aur_dir}/.SRCINFO")
 text = path.read_text(encoding="utf-8")
 text = re.sub(r"^\tpkgver = .*$", f"\tpkgver = {version}", text, flags=re.M)
-text = re.sub(r"just-talk-linux-x86_64-v[0-9.]+\.tar\.zst", f"just-talk-linux-x86_64-v{version}.tar.zst", text)
+text = re.sub(r"just-talk-[0-9.]+-x86_64\.AppImage", f"just-talk-{version}-x86_64.AppImage", text)
 text = re.sub(r"^\tsha256sums = [0-9a-f]+$", f"\tsha256sums = {sha256}", text, flags=re.M)
 path.write_text(text, encoding="utf-8")
 PY
+  echo "Updated .SRCINFO"
 fi
 
-echo "${release_dir}/${pkg}"
+echo "Done! AUR files updated to v${version}"
