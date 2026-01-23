@@ -486,6 +486,7 @@ class HotkeyCaptureDialog(QtWidgets.QDialog):
             if event.type() == QtCore.QEvent.Type.KeyPress:
                 # 在 macOS 上需要安全地获取 key
                 key = getattr(event, 'key', lambda: None)()
+                modifiers = getattr(event, 'modifiers', lambda: Qt.KeyboardModifier.NoModifier)()
                 if key is None:
                     return super().eventFilter(obj, event)
 
@@ -500,12 +501,16 @@ class HotkeyCaptureDialog(QtWidgets.QDialog):
                         self.accept()
                     return True
 
-                # 转换按键
+                # 从修饰键状态中提取按下的修饰键
+                self._update_from_modifiers(modifiers)
+
+                # 转换按键（非修饰键）
                 key_name = self._qt_key_to_name(key)
                 if key_name and key_name not in self._current_keys:
                     self._current_keys.add(key_name)
-                    self._captured_keys = sorted(self._current_keys)
-                    self._update_preview()
+
+                self._captured_keys = sorted(self._current_keys)
+                self._update_preview()
 
                 return True
 
@@ -517,18 +522,49 @@ class HotkeyCaptureDialog(QtWidgets.QDialog):
 
         return super().eventFilter(obj, event)
 
-    def _qt_key_to_name(self, key: int) -> Optional[str]:
-        """将Qt按键转换为标准名称"""
-        key_map = {
-            Qt.Key.Key_Control: "ctrl",
-            Qt.Key.Key_Meta: "super",  # Windows键/Super键
-            Qt.Key.Key_Alt: "alt",
-            Qt.Key.Key_Shift: "shift",
-            Qt.Key.Key_Space: "space",
-        }
+    def _update_from_modifiers(self, modifiers: Qt.KeyboardModifier) -> None:
+        """从修饰键状态更新当前按下的键"""
+        # 在 macOS 上，Qt 交换了 Control 和 Meta
+        if _IS_MACOS:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._current_keys.add("super")  # Command
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                self._current_keys.add("ctrl")  # Control
+        else:
+            if modifiers & Qt.KeyboardModifier.ControlModifier:
+                self._current_keys.add("ctrl")
+            if modifiers & Qt.KeyboardModifier.MetaModifier:
+                self._current_keys.add("super")
 
-        if key in key_map:
-            return key_map[key]
+        if modifiers & Qt.KeyboardModifier.AltModifier:
+            self._current_keys.add("alt")
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self._current_keys.add("shift")
+
+    def _qt_key_to_name(self, key: int) -> Optional[str]:
+        """将Qt按键转换为标准名称（不包括修饰键，修饰键通过 modifiers 处理）"""
+        # 修饰键由 _update_from_modifiers 处理，这里跳过
+        modifier_keys = {
+            Qt.Key.Key_Control,
+            Qt.Key.Key_Meta,
+            Qt.Key.Key_Alt,
+            Qt.Key.Key_Shift,
+            Qt.Key.Key_AltGr,
+        }
+        if key in modifier_keys:
+            return None
+
+        # 特殊键
+        special_keys = {
+            Qt.Key.Key_Space: "space",
+            Qt.Key.Key_Return: "enter",
+            Qt.Key.Key_Enter: "enter",
+            Qt.Key.Key_Tab: "tab",
+            Qt.Key.Key_Backspace: "backspace",
+            Qt.Key.Key_Delete: "delete",
+        }
+        if key in special_keys:
+            return special_keys[key]
 
         # 检查是否是字母数字键
         if Qt.Key.Key_A <= key <= Qt.Key.Key_Z:
