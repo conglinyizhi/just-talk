@@ -1272,6 +1272,10 @@ class AsrController(QtCore.QObject):
         # sounddevice backend (used on Linux when Qt backend unavailable)
         self._sd_stream = None
         self._use_sounddevice = False
+        # 预录音缓冲区：在 WebSocket 连接完成前缓存音频数据
+        self._pre_connect_buffer: bytearray = bytearray()
+        self._recording_before_connected = False  # 标记是否在连接前就开始录音
+        self._stop_pending_after_connect = False  # 标记录音已结束，等待连接后发送
 
         self._committed_text = ""
         self._last_committed_end_time = -1
@@ -1705,10 +1709,6 @@ class AsrController(QtCore.QObject):
         self._session_mode = self._indicator_mode
 
         if not self._connected:
-            # 先显示连接中指示器(三个点)
-            if self.recording_indicator:
-                self.recording_indicator.show_connecting()
-
             headers = {
                 "X-Api-App-Key": self._app_id.strip(),
                 "X-Api-Access-Key": self._access_token.strip(),
@@ -1727,9 +1727,20 @@ class AsrController(QtCore.QObject):
             url = self._mode_to_url()
             headers["X-Api-Connect-Id"] = self._connect_id
 
+            # 立即开始录音，同时后台连接 WebSocket
+            self._recording_before_connected = True
+            self._stop_pending_after_connect = False
+            self._pre_connect_buffer.clear()
+
             self._connecting = True
             self.isConnectingChanged.emit()
             self._update_status_text()
+
+            # 显示录音指示器（而不是连接中指示器）
+            self._show_indicator_mode(self._indicator_mode)
+            # 立即开始录音
+            self._start_mic()
+            # 后台连接 WebSocket
             self.ws.connect_url(url, headers)
             return
 
@@ -1741,18 +1752,33 @@ class AsrController(QtCore.QObject):
     def stop_recognition(self) -> None:
         self._reset_hotkey_state()
 
-        # 检查是否应该取消录音（没有发送任何音频数据）
-        should_cancel = not self._audio_sent
+        # 检查是否有预录音数据（还没发送但已经录制）
+        has_pre_connect_data = len(self._pre_connect_buffer) > 0
+        # 检查是否应该取消录音（没有发送任何音频数据且没有预录音数据）
+        should_cancel = not self._audio_sent and not has_pre_connect_data
 
+        # 如果正在连接但还没连接成功，且有预录音数据
         if self._connecting and not self._connected:
-            self._connecting = False
-            self.isConnectingChanged.emit()
-            self._finalize_session(cancelled=True)
-            self._force_close()
-            self._update_status_text()
-            if self.recording_indicator:
-                self.recording_indicator.hide()
-            return
+            if has_pre_connect_data:
+                # 有预录音数据，停止麦克风，等待连接完成后发送
+                self._stop_mic_no_last()
+                self._stop_pending_after_connect = True
+                # 显示处理中动画
+                if self.recording_indicator:
+                    self.recording_indicator.show_processing()
+                self._update_status_text()
+                return
+            else:
+                # 没有数据，直接取消
+                self._connecting = False
+                self._recording_before_connected = False
+                self.isConnectingChanged.emit()
+                self._finalize_session(cancelled=True)
+                self._force_close()
+                self._update_status_text()
+                if self.recording_indicator:
+                    self.recording_indicator.hide()
+                return
 
         if self._sending:
             if should_cancel:
@@ -3348,7 +3374,7 @@ class AsrController(QtCore.QObject):
         self._log("SEND", f"audio-only LAST({len(remainder)}B)")
 
     def _on_mic_ready(self) -> None:
-        if not self._sending or not self._connected:
+        if not self._sending:
             return
         if self._audio_io is None:
             return
@@ -3369,6 +3395,12 @@ class AsrController(QtCore.QObject):
         )
         if not pcm16k:
             return
+
+        # 如果还没连接，缓存到预连接缓冲区
+        if not self._connected and self._recording_before_connected:
+            self._pre_connect_buffer.extend(pcm16k)
+            return
+
         self._mic_buffer.extend(pcm16k)
         chunk_bytes = self._chunk_bytes()
         while len(self._mic_buffer) >= chunk_bytes:
@@ -3381,10 +3413,16 @@ class AsrController(QtCore.QObject):
     @QtCore.pyqtSlot(bytes)
     def _on_sd_audio_data(self, raw: bytes) -> None:
         """Handle audio data from sounddevice backend."""
-        if not self._sending or not self._connected:
+        if not self._sending:
             return
         if not raw:
             return
+
+        # 如果还没连接，缓存到预连接缓冲区
+        if not self._connected and self._recording_before_connected:
+            self._pre_connect_buffer.extend(raw)
+            return
+
         self._mic_buffer.extend(raw)
         chunk_bytes = self._chunk_bytes()
         while len(self._mic_buffer) >= chunk_bytes:
@@ -3401,9 +3439,47 @@ class AsrController(QtCore.QObject):
         self.isConnectingChanged.emit()
         self._update_status_text()
         self._send_default_request()
-        # 连接成功后,切换到录音模式指示器
-        self._show_indicator_mode(self._indicator_mode)
-        self._start_mic()
+
+        # 如果是预录音模式，发送缓存的音频数据
+        if self._recording_before_connected and self._pre_connect_buffer:
+            self._log("SEND", f"发送预录音缓冲区数据: {len(self._pre_connect_buffer)} 字节")
+            chunk_bytes = self._chunk_bytes()
+            # 将预连接缓冲区数据添加到 mic_buffer
+            self._mic_buffer = self._pre_connect_buffer + self._mic_buffer
+            self._pre_connect_buffer = bytearray()
+
+            # 发送所有完整的 chunk
+            while len(self._mic_buffer) >= chunk_bytes:
+                chunk = bytes(self._mic_buffer[:chunk_bytes])
+                del self._mic_buffer[:chunk_bytes]
+                frame = build_audio_only_request(chunk, last=False, use_gzip=self._use_gzip)
+                self.ws.send_binary(frame)
+                self._audio_sent = True
+
+        # 如果录音在连接前就已经结束，现在处理结束逻辑
+        if self._stop_pending_after_connect:
+            self._stop_pending_after_connect = False
+            self._recording_before_connected = False
+            # 发送剩余数据并结束
+            if self._audio_sent or self._mic_buffer:
+                self._pending_close_after_last = True
+                self._stop_mic_send_last()
+                self._pending_close_timer.start(1500)
+                if self.recording_indicator:
+                    self.recording_indicator.show_processing()
+            else:
+                # 没有音频数据，取消
+                if self._current_row is not None:
+                    self._history_model.remove_row(self._current_row)
+                    self._emit_history_removed(self._current_row)
+                    self._current_row = None
+                self._force_close()
+            return
+
+        self._recording_before_connected = False
+        # 连接成功后,切换到录音模式指示器（如果还在录音）
+        if self._sending:
+            self._show_indicator_mode(self._indicator_mode)
 
     def _on_disconnected(self) -> None:
         self._connected = False
@@ -3551,6 +3627,9 @@ class AsrController(QtCore.QObject):
         self._connecting = False
         self._connected = False
         self._pending_close_after_last = False
+        self._recording_before_connected = False
+        self._stop_pending_after_connect = False
+        self._pre_connect_buffer.clear()
         try:
             self.ws.close_ws()
         except Exception:
