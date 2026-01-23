@@ -565,6 +565,16 @@
                     </div>
                     <div class="hint-text">把一些语言停顿的地方自动抹平</div>
                 </div>
+                <div class="form-group">
+                    <div class="switch-row" style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: 600;">启用延迟收音</span>
+                        <label class="switch">
+                            <input id="enable-delayed-stop" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">延迟收音会降低一点识别速度，但会提升部分快速操作场景下的识别效果</div>
+                </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label>热词设置</label>
                     <div class="hint-text" style="margin-bottom: 6px;">每行一个热词，用于提高人名、品牌、术语等词汇的识别准确率</div>
@@ -630,6 +640,14 @@
                         <button data-target="mouse" data-mode="toggle" class="seg-btn">切换</button>
                     </div>
                 </div>
+                <div id="macos-accessibility-hint" class="hint-text" style="display: none; margin-top: 12px; padding: 12px; background: #fef3c7; border-radius: var(--radius-md); color: #92400e;">
+                    <strong>macOS 辅助功能权限</strong><br>
+                    全局快捷键需要「辅助功能」权限才能在其他应用中使用：<br>
+                    1. 打开「系统设置 → 隐私与安全性 → 辅助功能」<br>
+                    2. 找到 Python 或 Terminal，勾选允许<br>
+                    3. 如果已勾选但不生效，请取消后重新勾选<br>
+                    4. 重启应用
+                </div>
             </div>
 
             <div class="card">
@@ -694,7 +712,22 @@
    syncAutoSubmitAdvancedToggle();
    $("enable-punc").checked = !!controller.enablePunc;
    $("enable-ddc").checked = !!controller.enableDdc;
+   $("enable-delayed-stop").checked = !!controller.enableDelayedStop;
    $("hotwords").value = controller.hotwords || "";
+
+   // macOS 平台特殊处理
+   const isMacOS = navigator.platform.toUpperCase().indexOf('MAC') >= 0 ||
+                   navigator.userAgent.toUpperCase().indexOf('MAC') >= 0;
+   if (isMacOS) {
+     // 隐藏自动上屏高级设置按钮（macOS 只支持快捷键粘贴模式）
+     const advToggle = $("auto-submit-advanced-toggle");
+     if (advToggle) advToggle.style.display = "none";
+     const advPanel = $("auto-submit-advanced-panel");
+     if (advPanel) advPanel.style.display = "none";
+     // 显示辅助功能权限提示
+     const accessHint = $("macos-accessibility-hint");
+     if (accessHint) accessHint.style.display = "block";
+   }
 
    // 模式切换
    document.querySelectorAll(".seg-btn[data-mode]").forEach(btn => {
@@ -878,6 +911,7 @@
    });
    $("enable-punc").addEventListener("change", (e) => controller && (controller.enablePunc = e.target.checked));
    $("enable-ddc").addEventListener("change", (e) => controller && (controller.enableDdc = e.target.checked));
+   $("enable-delayed-stop").addEventListener("change", (e) => controller && (controller.enableDelayedStop = e.target.checked));
    $("hotwords").addEventListener("input", (e) => controller && (controller.hotwords = e.target.value));
 
    // 全局模式切换
@@ -943,7 +977,7 @@
      'isConnectedChanged', 'statsChanged', 'modeChanged',
      'appIdChanged', 'accessTokenChanged', 'useGzipChanged',
      'startMinimizedChanged', 'autoSubmitChanged', 'autoSubmitModeChanged',
-     'enablePuncChanged', 'enableDdcChanged', 'hotwordsChanged',
+     'enablePuncChanged', 'enableDdcChanged', 'enableDelayedStopChanged', 'hotwordsChanged',
      'primaryHotkeyTextChanged', 'primaryHotkeyEnabledChanged',
      'freehandHotkeyTextChanged', 'freehandHotkeyEnabledChanged',
      'mouseHotkeyModeChanged', 'mouseModeEnabledChanged'

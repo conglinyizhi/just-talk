@@ -1209,6 +1209,7 @@ class AsrController(QtCore.QObject):
     autoSubmitStatusChanged = QtCore.pyqtSignal()
     enablePuncChanged = QtCore.pyqtSignal()
     enableDdcChanged = QtCore.pyqtSignal()
+    enableDelayedStopChanged = QtCore.pyqtSignal()
     hotwordsChanged = QtCore.pyqtSignal()
     hotkeysEnabledChanged = QtCore.pyqtSignal()
     mouseModeEnabledChanged = QtCore.pyqtSignal()
@@ -1258,6 +1259,11 @@ class AsrController(QtCore.QObject):
         self._pending_close_timer = QtCore.QTimer(self)
         self._pending_close_timer.setSingleShot(True)
         self._pending_close_timer.timeout.connect(self._force_close)
+        # 延迟停止定时器：用户按下停止键后延迟一小段时间再真正停止，以捕获尾音
+        self._delayed_stop_timer = QtCore.QTimer(self)
+        self._delayed_stop_timer.setSingleShot(True)
+        self._delayed_stop_timer.timeout.connect(self._do_stop_recognition)
+        self._delayed_stop_ms = 150  # 延迟停止时间（毫秒）
         self._default_limit_timer = QtCore.QTimer(self)
         self._default_limit_timer.setSingleShot(True)
         self._default_limit_timer.timeout.connect(self._on_default_limit_timeout)
@@ -1305,6 +1311,7 @@ class AsrController(QtCore.QObject):
         self._auto_submit_paste_keys = "ctrl+v"
         self._enable_punc = True
         self._enable_ddc = False
+        self._enable_delayed_stop = True  # 默认启用延迟收音
         self._hotwords = ""
         self._status_text = "未连接"
         self._hotkeys_enabled = True
@@ -1522,6 +1529,18 @@ class AsrController(QtCore.QObject):
             self.enableDdcChanged.emit()
             self._save_personalization_config()
 
+    @QtCore.pyqtProperty(bool, notify=enableDelayedStopChanged)
+    def enableDelayedStop(self) -> bool:  # noqa: N802
+        return self._enable_delayed_stop
+
+    @enableDelayedStop.setter
+    def enableDelayedStop(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._enable_delayed_stop:
+            self._enable_delayed_stop = value
+            self.enableDelayedStopChanged.emit()
+            self._save_personalization_config()
+
     @QtCore.pyqtProperty(str, notify=hotwordsChanged)
     def hotwords(self) -> str:  # noqa: N802
         return self._hotwords
@@ -1695,6 +1714,15 @@ class AsrController(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def start_recognition(self, indicator_mode: Optional[str] = None) -> None:
+        if (
+            self._sending
+            or self._connecting
+            or self._pending_close_after_last
+            or self._stop_pending_after_connect
+            or self._pending_close_timer.isActive()
+        ):
+            # 上一轮录音可能还在收尾，清理残留状态避免指示器被旧计时器关闭
+            self._force_close()
         if self._sending or self._connecting:
             return
 
@@ -1750,18 +1778,69 @@ class AsrController(QtCore.QObject):
 
     @QtCore.pyqtSlot()
     def stop_recognition(self) -> None:
+        """停止识别（可选延迟版本）
+
+        如果启用延迟收音，在用户按下停止键后延迟一小段时间再真正停止录音，
+        以捕获用户说完话后的尾音。
+        """
         self._reset_hotkey_state()
 
+        # 如果延迟停止定时器已经在运行，说明用户重复按了停止键，直接执行停止
+        if self._delayed_stop_timer.isActive():
+            self._delayed_stop_timer.stop()
+            self._do_stop_recognition()
+            return
+
+        # 如果不在录音状态，直接执行停止（无需延迟）
+        if not self._sending and not (self._connecting and not self._connected):
+            self._do_stop_recognition()
+            return
+
+        # 如果正在连接但还没连接成功
+        if self._connecting and not self._connected:
+            # 这种情况不延迟，直接处理
+            self._do_stop_recognition()
+            return
+
+        # 正在录音：根据设置决定是否延迟停止
+        if self._enable_delayed_stop:
+            self._delayed_stop_timer.start(self._delayed_stop_ms)
+        else:
+            self._do_stop_recognition()
+
+    def _do_stop_recognition(self) -> None:
+        """真正执行停止识别的逻辑"""
         # 检查是否有预录音数据（还没发送但已经录制）
         has_pre_connect_data = len(self._pre_connect_buffer) > 0
-        # 检查是否应该取消录音（没有发送任何音频数据且没有预录音数据）
-        should_cancel = not self._audio_sent and not has_pre_connect_data
+        # 检查 mic_buffer 是否有数据（可能是预连接数据的剩余部分）
+        has_mic_buffer_data = len(self._mic_buffer) > 0
+        # 检查是否应该取消录音（没有发送任何音频数据且没有待发送数据）
+        should_cancel = not self._audio_sent and not has_pre_connect_data and not has_mic_buffer_data
 
         # 如果正在连接但还没连接成功，且有预录音数据
         if self._connecting and not self._connected:
             if has_pre_connect_data:
-                # 有预录音数据，停止麦克风，等待连接完成后发送
-                self._stop_mic_no_last()
+                # 有预录音数据，停止麦克风硬件但保留缓冲区，等待连接完成后发送
+                self._stop_default_limit_timer()
+                # Stop Qt audio source
+                try:
+                    if self._audio_source is not None:
+                        self._audio_source.stop()
+                except Exception:
+                    pass
+                self._audio_source = None
+                self._audio_io = None
+                # Stop sounddevice stream
+                try:
+                    if self._sd_stream is not None:
+                        self._sd_stream.stop()
+                        self._sd_stream.close()
+                except Exception:
+                    pass
+                self._sd_stream = None
+                self._use_sounddevice = False
+                # 注意：不清除 _pre_connect_buffer 和 _mic_buffer！
+
                 self._stop_pending_after_connect = True
                 # 显示处理中动画
                 if self.recording_indicator:
@@ -2119,19 +2198,30 @@ class AsrController(QtCore.QObject):
         parts: List[str] = []
         mods = event.modifiers() | self._modifier_from_key(event.key())
 
-        if mods & Qt.KeyboardModifier.ControlModifier:
-            parts.append("Ctrl")
-        if mods & Qt.KeyboardModifier.AltModifier:
-            parts.append("Alt")
-        if mods & Qt.KeyboardModifier.ShiftModifier:
-            parts.append("Shift")
-        if mods & Qt.KeyboardModifier.MetaModifier:
-            if self._is_windows:
-                parts.append("Win")
-            elif self._is_mac:
-                parts.append("Cmd")
-            else:
-                parts.append("Super")
+        # macOS 上 Qt 的 modifier 映射与其他平台不同:
+        # - ControlModifier = Command 键 (⌘)
+        # - MetaModifier = Control 键 (⌃)
+        if self._is_mac:
+            if mods & Qt.KeyboardModifier.MetaModifier:
+                parts.append("Ctrl")  # Control 键
+            if mods & Qt.KeyboardModifier.AltModifier:
+                parts.append("Alt")   # Option 键
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("Shift")
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                parts.append("Cmd")   # Command 键
+        else:
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                parts.append("Ctrl")
+            if mods & Qt.KeyboardModifier.AltModifier:
+                parts.append("Alt")
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("Shift")
+            if mods & Qt.KeyboardModifier.MetaModifier:
+                if self._is_windows:
+                    parts.append("Win")
+                else:
+                    parts.append("Super")
 
         key = event.key()
         key_name = self._key_name_from_event(key, event.text(), include_mod_key=True)
@@ -2266,6 +2356,7 @@ class AsrController(QtCore.QObject):
         )
         enable_punc = settings.value("Personalization/enable_punc", self._enable_punc)
         enable_ddc = settings.value("Personalization/enable_ddc", self._enable_ddc)
+        enable_delayed_stop = settings.value("Personalization/enable_delayed_stop", self._enable_delayed_stop)
         hotwords = settings.value("Personalization/hotwords", self._hotwords)
 
         def coerce_bool(value: object) -> bool:
@@ -2287,6 +2378,7 @@ class AsrController(QtCore.QObject):
                 self._auto_submit_paste_keys = value
         self._enable_punc = coerce_bool(enable_punc)
         self._enable_ddc = coerce_bool(enable_ddc)
+        self._enable_delayed_stop = coerce_bool(enable_delayed_stop)
         if hotwords is not None:
             self._hotwords = str(hotwords)
 
@@ -2298,6 +2390,7 @@ class AsrController(QtCore.QObject):
         settings.setValue("Personalization/auto_submit_paste_keys", self._auto_submit_paste_keys)
         settings.setValue("Personalization/enable_punc", self._enable_punc)
         settings.setValue("Personalization/enable_ddc", self._enable_ddc)
+        settings.setValue("Personalization/enable_delayed_stop", self._enable_delayed_stop)
         settings.setValue("Personalization/hotwords", self._hotwords)
         settings.sync()
 
@@ -2671,7 +2764,10 @@ class AsrController(QtCore.QObject):
         self._show_error_dialog(context, str(error), error_details)
 
     def _start_mic(self) -> None:
-        if self._sending or not self._connected:
+        # 允许在预录音模式下启动麦克风（_recording_before_connected=True 时 _connected=False）
+        if self._sending:
+            return
+        if not self._connected and not self._recording_before_connected:
             return
 
         # macOS: 检查麦克风权限 (Qt 6.5+)
@@ -2939,6 +3035,11 @@ class AsrController(QtCore.QObject):
             if self._windows_type_text(text):
                 self._mark_auto_submit_backend("win32:sendinput_type")
                 return True
+        # macOS: try Quartz CGEvent
+        if self._is_mac:
+            if self._macos_type_text(text):
+                self._mark_auto_submit_backend("quartz:type")
+                return True
         try:
             from pynput.keyboard import Controller
 
@@ -2978,6 +3079,11 @@ class AsrController(QtCore.QObject):
             if method:
                 self._mark_auto_submit_backend(f"win32:{method}")
                 return
+        # macOS: try Quartz CGEvent for Cmd+V
+        if self._is_mac:
+            if self._macos_send_paste():
+                self._mark_auto_submit_backend("quartz:paste")
+                return
         try:
             if not self._send_key_combo_pynput(key_combo):
                 fallback = self._default_paste_keys()
@@ -2985,6 +3091,64 @@ class AsrController(QtCore.QObject):
             self._mark_auto_submit_backend("pynput:paste")
         except Exception:
             pass
+
+    def _macos_type_text(self, text: str) -> bool:
+        """macOS: 使用 Quartz CGEvent 模拟键盘输入文本"""
+        if not self._is_mac:
+            return False
+        try:
+            import Quartz
+            from Quartz import (
+                CGEventCreateKeyboardEvent,
+                CGEventPost,
+                CGEventSetUnicodeString,
+                kCGHIDEventTap,
+            )
+
+            for char in text:
+                # 创建一个按键事件并设置 Unicode 字符
+                event_down = CGEventCreateKeyboardEvent(None, 0, True)
+                event_up = CGEventCreateKeyboardEvent(None, 0, False)
+                CGEventSetUnicodeString(event_down, 1, char)
+                CGEventSetUnicodeString(event_up, 1, char)
+                CGEventPost(kCGHIDEventTap, event_down)
+                CGEventPost(kCGHIDEventTap, event_up)
+            return True
+        except Exception as e:
+            self._log("MACOS", f"Quartz type text failed: {e}")
+            return False
+
+    def _macos_send_paste(self) -> bool:
+        """macOS: 使用 Quartz CGEvent 模拟 Cmd+V 粘贴"""
+        if not self._is_mac:
+            return False
+        try:
+            import Quartz
+            from Quartz import (
+                CGEventCreateKeyboardEvent,
+                CGEventPost,
+                CGEventSetFlags,
+                kCGHIDEventTap,
+                kCGEventFlagMaskCommand,
+            )
+
+            # V 键的虚拟按键码是 9
+            V_KEYCODE = 9
+
+            # 按下 Cmd+V
+            event_down = CGEventCreateKeyboardEvent(None, V_KEYCODE, True)
+            CGEventSetFlags(event_down, kCGEventFlagMaskCommand)
+            CGEventPost(kCGHIDEventTap, event_down)
+
+            # 释放 V
+            event_up = CGEventCreateKeyboardEvent(None, V_KEYCODE, False)
+            CGEventSetFlags(event_up, kCGEventFlagMaskCommand)
+            CGEventPost(kCGHIDEventTap, event_up)
+
+            return True
+        except Exception as e:
+            self._log("MACOS", f"Quartz paste failed: {e}")
+            return False
 
     def _windows_send_paste(self) -> Optional[str]:
         """Send paste using Windows API. Returns method name on success, None on failure.
@@ -3345,6 +3509,12 @@ class AsrController(QtCore.QObject):
             available.append("xdotool")
         if self._wtype_path:
             available.append("wtype")
+        if self._is_mac:
+            try:
+                import Quartz  # noqa: F401
+                available.append("quartz")
+            except Exception:
+                pass
         try:
             import pynput  # noqa: F401
 
@@ -3355,7 +3525,12 @@ class AsrController(QtCore.QObject):
         if last_used:
             status = f"当前上屏后端：{last_used}"
         else:
-            order = "Wayland: wtype > xdotool > pynput" if self._is_wayland else "X11: xdotool > wtype > pynput"
+            if self._is_mac:
+                order = "macOS: quartz > pynput"
+            elif self._is_wayland:
+                order = "Wayland: wtype > xdotool > pynput"
+            else:
+                order = "X11: xdotool > wtype > pynput"
             status = f"上屏后端：{self._auto_submit_mode}（{order}），可用：{available_text}"
         if status != self._auto_submit_status:
             self._auto_submit_status = status
@@ -3365,8 +3540,51 @@ class AsrController(QtCore.QObject):
         self._refresh_auto_submit_status(last_used=backend)
 
     def _stop_mic_send_last(self) -> None:
+        # 1. 先停止音频流（阻止新数据产生），但暂时保持 _sending = True
+        self._stop_default_limit_timer()
+
+        # Stop Qt audio source
+        try:
+            if self._audio_source is not None:
+                self._audio_source.stop()
+        except Exception:
+            pass
+        self._audio_source = None
+        self._audio_io = None
+
+        # Stop sounddevice stream
+        try:
+            if self._sd_stream is not None:
+                self._sd_stream.stop()
+                self._sd_stream.close()
+        except Exception:
+            pass
+        self._sd_stream = None
+        self._use_sounddevice = False
+
+        # 2. 处理 Qt 事件队列，确保所有挂起的音频数据信号都被处理
+        # 这是修复"最后一个字丢失"问题的关键：
+        # sounddevice 回调通过 QueuedConnection 发送数据，可能有数据在队列中
+        QtCore.QCoreApplication.processEvents()
+
+        # 3. 现在收集所有 buffer 中的数据
         remainder = bytes(self._mic_buffer) if self._mic_buffer else b""
-        self._stop_mic_no_last()
+        self._mic_buffer.clear()
+
+        # 4. 设置 _sending = False
+        if self._sending:
+            self._sending = False
+            self.isSendingChanged.emit()
+            self._update_status_text()
+
+        # 更新会话统计
+        if self._session_started_at is not None:
+            self._session_elapsed_s += time.monotonic() - self._session_started_at
+            self._session_started_at = None
+        if self._stats_timer.isActive():
+            self._stats_timer.stop()
+
+        # 5. 发送 last 帧
         if not self._connected:
             return
         frame = build_audio_only_request(remainder, last=True, use_gzip=self._use_gzip)
@@ -3414,6 +3632,7 @@ class AsrController(QtCore.QObject):
     def _on_sd_audio_data(self, raw: bytes) -> None:
         """Handle audio data from sounddevice backend."""
         if not self._sending:
+            # 流停止后，队列中可能还有残留的信号，静默忽略
             return
         if not raw:
             return
@@ -3421,6 +3640,7 @@ class AsrController(QtCore.QObject):
         # 如果还没连接，缓存到预连接缓冲区
         if not self._connected and self._recording_before_connected:
             self._pre_connect_buffer.extend(raw)
+            self._log("MIC", f"_on_sd_audio_data: buffered {len(raw)} bytes, total={len(self._pre_connect_buffer)}")
             return
 
         self._mic_buffer.extend(raw)
@@ -3441,7 +3661,7 @@ class AsrController(QtCore.QObject):
         self._send_default_request()
 
         # 如果是预录音模式，发送缓存的音频数据
-        if self._recording_before_connected and self._pre_connect_buffer:
+        if self._pre_connect_buffer:
             self._log("SEND", f"发送预录音缓冲区数据: {len(self._pre_connect_buffer)} 字节")
             chunk_bytes = self._chunk_bytes()
             # 将预连接缓冲区数据添加到 mic_buffer
@@ -3624,6 +3844,7 @@ class AsrController(QtCore.QObject):
                 clipboard.setText(full_error)
 
     def _force_close(self) -> None:
+        self._pending_close_timer.stop()
         self._connecting = False
         self._connected = False
         self._pending_close_after_last = False
@@ -3763,7 +3984,7 @@ class LoggingWebPage(QtWebEngineCore.QWebEnginePage):
             LOG.exception("JS console handler failed")
 
 
-def _load_app_icon() -> QtGui.QIcon:
+def _load_app_icon(*, pad_macos: bool = True) -> QtGui.QIcon:
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
     # macOS 优先使用 icns
     if sys.platform == "darwin":
@@ -3777,16 +3998,30 @@ def _load_app_icon() -> QtGui.QIcon:
         if os.path.exists(icon_path):
             # 为 macOS 创建包含多个尺寸的图标
             if sys.platform == "darwin" and icon_name == "icon.png":
+                def build_padded_pixmap(source: QtGui.QPixmap, size: int, inset_ratio: float) -> QtGui.QPixmap:
+                    canvas = QtGui.QPixmap(size, size)
+                    canvas.fill(Qt.GlobalColor.transparent)
+                    inset = int(round(size * inset_ratio))
+                    target_size = max(1, size - 2 * inset)
+                    scaled = source.scaled(
+                        target_size, target_size,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    x = (size - scaled.width()) // 2
+                    y = (size - scaled.height()) // 2
+                    painter = QtGui.QPainter(canvas)
+                    painter.setRenderHint(QtGui.QPainter.RenderHint.SmoothPixmapTransform, True)
+                    painter.drawPixmap(x, y, scaled)
+                    painter.end()
+                    return canvas
+
                 icon = QtGui.QIcon()
                 pixmap = QtGui.QPixmap(icon_path)
                 if not pixmap.isNull():
+                    inset_ratio = 0.12 if pad_macos else 0.0
                     for size in (16, 32, 64, 128, 256, 512):
-                        scaled = pixmap.scaled(
-                            size, size,
-                            Qt.AspectRatioMode.KeepAspectRatio,
-                            Qt.TransformationMode.SmoothTransformation
-                        )
-                        icon.addPixmap(scaled)
+                        icon.addPixmap(build_padded_pixmap(pixmap, size, inset_ratio))
                     if not icon.isNull():
                         return icon
             icon = QtGui.QIcon(icon_path)
@@ -3796,7 +4031,7 @@ def _load_app_icon() -> QtGui.QIcon:
 
 
 def _build_tray_icon() -> QtGui.QIcon:
-    icon = _load_app_icon()
+    icon = _load_app_icon(pad_macos=False)
     if not icon.isNull():
         return icon
     base_dir = getattr(sys, "_MEIPASS", os.path.dirname(__file__))
@@ -3914,11 +4149,12 @@ def main() -> int:
                 hotkeys_action.setChecked(controller.hotkeysEnabled)
 
         def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
-            if reason in (
-                QtWidgets.QSystemTrayIcon.ActivationReason.Trigger,
-                QtWidgets.QSystemTrayIcon.ActivationReason.DoubleClick,
-            ):
-                toggle_main_window()
+            # macOS: 使用原生托盘菜单，不需要手动弹出
+            if sys.platform == "darwin":
+                return
+            if reason == QtWidgets.QSystemTrayIcon.ActivationReason.Trigger:
+                if not tray_menu.isVisible():
+                    tray_menu.popup(QtGui.QCursor.pos())
 
         show_action.triggered.connect(toggle_main_window)
         hotkeys_action.toggled.connect(lambda checked: setattr(controller, "hotkeysEnabled", checked))
@@ -3928,6 +4164,7 @@ def main() -> int:
         tray_menu.addAction(hotkeys_action)
         tray_menu.addSeparator()
         tray_menu.addAction(quit_action)
+        # 使用系统托盘的原生菜单样式
         tray_icon.setContextMenu(tray_menu)
         tray_icon.activated.connect(on_tray_activated)
         tray_icon.show()
