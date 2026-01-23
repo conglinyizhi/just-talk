@@ -127,6 +127,7 @@ a.binaries = [
 ]
 
 # Avoid bundling distro-specific OpenGL/GLX stack libs that can break on other distros.
+# Exclude host X11/GL stacks to avoid bundling distro-specific drivers/libs.
 gl_exclude_prefixes = (
     "libOpenGL",
     "libGL",
@@ -141,7 +142,33 @@ gl_exclude_prefixes = (
 
 def _keep_binary(entry):
     name = os.path.basename(entry[0])
-    return not name.startswith(gl_exclude_prefixes)
+    if name.startswith(gl_exclude_prefixes):
+        return False
+    # X11/XCB/Wayland system libs should come from the target distro.
+    x11_prefixes = (
+        "libX11",
+        "libX11-xcb",
+        "libXau",
+        "libXcursor",
+        "libXdamage",
+        "libXdmcp",
+        "libXext",
+        "libXfixes",
+        "libXi",
+        "libXinerama",
+        "libXrandr",
+        "libXrender",
+        "libXtst",
+        "libICE",
+        "libSM",
+        "libxcb",
+        "libxkbcommon",
+        "libxkbcommon-x11",
+        "libwayland-client",
+        "libwayland-cursor",
+        "libwayland-egl",
+    )
+    return not name.startswith(x11_prefixes)
 
 a.binaries = [b for b in a.binaries if _keep_binary(b)]
 
