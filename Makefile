@@ -60,8 +60,6 @@ build-appimage: build-linux
 	@echo 'SELF=$$(readlink -f "$$0")' >> AppDir/AppRun
 	@echo 'HERE=$${SELF%/*}' >> AppDir/AppRun
 	@echo 'export PATH="$${HERE}/usr/bin:$${PATH}"' >> AppDir/AppRun
-	@echo '# Workaround for GLX compatibility issues across different distros' >> AppDir/AppRun
-	@echo 'export QT_XCB_GL_INTEGRATION="$${QT_XCB_GL_INTEGRATION:-none}"' >> AppDir/AppRun
 	@echo 'exec "$${HERE}/usr/bin/just-talk" "$$@"' >> AppDir/AppRun
 	chmod +x AppDir/AppRun
 	@# Build AppImage

@@ -16,7 +16,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-20.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -104,8 +104,6 @@ jobs:
           SELF=$(readlink -f "$0")
           HERE=${SELF%/*}
           export PATH="${HERE}/usr/bin:${PATH}"
-          # Workaround for GLX compatibility issues across different distros
-          export QT_XCB_GL_INTEGRATION="${QT_XCB_GL_INTEGRATION:-none}"
           exec "${HERE}/usr/bin/just-talk" "$@"
           APPRUN
           chmod +x AppDir/AppRun
