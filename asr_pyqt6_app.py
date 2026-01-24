@@ -1241,6 +1241,7 @@ class AsrController(QtCore.QObject):
     historyRowRemoved = QtCore.pyqtSignal(int)
     themeChanged = QtCore.pyqtSignal()
     notifyOnCompleteChanged = QtCore.pyqtSignal()
+    delayedStopMsChanged = QtCore.pyqtSignal()
 
     RESOURCE_ID_DEFAULT = "volc.seedasr.sauc.duration"
     CHUNK_MS_DEFAULT = 200
@@ -1551,6 +1552,18 @@ class AsrController(QtCore.QObject):
         if value != self._enable_delayed_stop:
             self._enable_delayed_stop = value
             self.enableDelayedStopChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(int, notify=delayedStopMsChanged)
+    def delayedStopMs(self) -> int:  # noqa: N802
+        return self._delayed_stop_ms
+
+    @delayedStopMs.setter
+    def delayedStopMs(self, value: int) -> None:
+        value = max(0, min(500, int(value)))  # 限制范围 0-500ms
+        if value != self._delayed_stop_ms:
+            self._delayed_stop_ms = value
+            self.delayedStopMsChanged.emit()
             self._save_personalization_config()
 
     @QtCore.pyqtProperty(str, notify=hotwordsChanged)
@@ -2396,6 +2409,7 @@ class AsrController(QtCore.QObject):
         enable_punc = settings.value("Personalization/enable_punc", self._enable_punc)
         enable_ddc = settings.value("Personalization/enable_ddc", self._enable_ddc)
         enable_delayed_stop = settings.value("Personalization/enable_delayed_stop", self._enable_delayed_stop)
+        delayed_stop_ms = settings.value("Personalization/delayed_stop_ms", self._delayed_stop_ms)
         hotwords = settings.value("Personalization/hotwords", self._hotwords)
 
         def coerce_bool(value: object) -> bool:
@@ -2418,6 +2432,11 @@ class AsrController(QtCore.QObject):
         self._enable_punc = coerce_bool(enable_punc)
         self._enable_ddc = coerce_bool(enable_ddc)
         self._enable_delayed_stop = coerce_bool(enable_delayed_stop)
+        if delayed_stop_ms is not None:
+            try:
+                self._delayed_stop_ms = max(0, min(500, int(delayed_stop_ms)))
+            except (ValueError, TypeError):
+                pass  # 保持默认值 150ms
         if hotwords is not None:
             self._hotwords = str(hotwords)
 
@@ -2439,6 +2458,7 @@ class AsrController(QtCore.QObject):
         settings.setValue("Personalization/enable_punc", self._enable_punc)
         settings.setValue("Personalization/enable_ddc", self._enable_ddc)
         settings.setValue("Personalization/enable_delayed_stop", self._enable_delayed_stop)
+        settings.setValue("Personalization/delayed_stop_ms", self._delayed_stop_ms)
         settings.setValue("Personalization/hotwords", self._hotwords)
         settings.setValue("Personalization/theme", self._theme)
         settings.setValue("Personalization/notify_on_complete", self._notify_on_complete)

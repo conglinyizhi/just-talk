@@ -509,6 +509,36 @@
             align-items: center;
         }
 
+        .slider-row {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .slider-row input[type="range"] {
+            flex: 1;
+            height: 4px;
+            -webkit-appearance: none;
+            appearance: none;
+            background: var(--border-color);
+            border-radius: 2px;
+            outline: none;
+        }
+
+        .slider-row input[type="range"]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            background: var(--accent-black);
+            border-radius: 50%;
+            cursor: pointer;
+        }
+
+        [data-theme="dark"] .slider-row input[type="range"]::-webkit-slider-thumb {
+            background: #fafafa;
+        }
+
         .switch {
             position: relative;
             display: inline-block;
@@ -826,6 +856,10 @@
                         </label>
                     </div>
                     <div class="hint-text">延迟收音会降低一点识别速度，但会提升部分快速操作场景下的识别效果</div>
+                    <div class="slider-row" style="margin-top: 10px;">
+                        <input type="range" id="delayed-stop-ms" min="0" max="500" step="10" value="150">
+                        <span id="delayed-stop-ms-value" style="min-width: 50px; text-align: right; font-size: 12px; color: var(--text-muted);">150ms</span>
+                    </div>
                 </div>
                 <div class="form-group">
                     <div class="switch-row" style="margin-bottom: 8px;">
@@ -1003,6 +1037,9 @@
    $("enable-punc").checked = !!controller.enablePunc;
    $("enable-ddc").checked = !!controller.enableDdc;
    $("enable-delayed-stop").checked = !!controller.enableDelayedStop;
+   $("delayed-stop-ms").value = controller.delayedStopMs || 150;
+   $("delayed-stop-ms-value").textContent = ($("delayed-stop-ms").value) + "ms";
+   $("delayed-stop-ms").parentElement.style.display = controller.enableDelayedStop ? "flex" : "none";
    $("notify-on-complete").checked = !!controller.notifyOnComplete;
    $("hotwords").value = controller.hotwords || "";
 
@@ -1207,7 +1244,14 @@
    });
    $("enable-punc").addEventListener("change", (e) => controller && (controller.enablePunc = e.target.checked));
    $("enable-ddc").addEventListener("change", (e) => controller && (controller.enableDdc = e.target.checked));
-   $("enable-delayed-stop").addEventListener("change", (e) => controller && (controller.enableDelayedStop = e.target.checked));
+   $("enable-delayed-stop").addEventListener("change", (e) => {
+     if (controller) controller.enableDelayedStop = e.target.checked;
+     $("delayed-stop-ms").parentElement.style.display = e.target.checked ? "flex" : "none";
+   });
+   $("delayed-stop-ms").addEventListener("input", (e) => {
+     $("delayed-stop-ms-value").textContent = e.target.value + "ms";
+     if (controller) controller.delayedStopMs = parseInt(e.target.value, 10);
+   });
    $("notify-on-complete").addEventListener("change", (e) => controller && (controller.notifyOnComplete = e.target.checked));
    $("hotwords").addEventListener("input", (e) => controller && (controller.hotwords = e.target.value));
 
@@ -1304,7 +1348,7 @@
      'primaryHotkeyTextChanged', 'primaryHotkeyEnabledChanged',
      'freehandHotkeyTextChanged', 'freehandHotkeyEnabledChanged',
      'mouseHotkeyModeChanged', 'mouseModeEnabledChanged', 'themeChanged',
-     'notifyOnCompleteChanged'
+     'notifyOnCompleteChanged', 'delayedStopMsChanged'
    ];
 
    signals.forEach(sig => {
