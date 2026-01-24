@@ -1240,6 +1240,7 @@ class AsrController(QtCore.QObject):
     historyRowUpdated = QtCore.pyqtSignal(int, str)  # JSON string
     historyRowRemoved = QtCore.pyqtSignal(int)
     themeChanged = QtCore.pyqtSignal()
+    notifyOnCompleteChanged = QtCore.pyqtSignal()
 
     RESOURCE_ID_DEFAULT = "volc.seedasr.sauc.duration"
     CHUNK_MS_DEFAULT = 200
@@ -1344,6 +1345,8 @@ class AsrController(QtCore.QObject):
         self._session_type = os.environ.get("XDG_SESSION_TYPE", "").strip().lower()
         self._is_wayland = self._session_type == "wayland"
         self._theme = "auto"  # "light" / "dark" / "auto"
+        self._notify_on_complete = False  # 识别完成后是否发送通知
+        self._tray_icon: Optional["QtWidgets.QSystemTrayIcon"] = None
 
         self._session_started_at: Optional[float] = None
         self._session_elapsed_s = 0.0
@@ -1573,6 +1576,21 @@ class AsrController(QtCore.QObject):
             self._theme = value
             self.themeChanged.emit()
             self._save_personalization_config()
+
+    @QtCore.pyqtProperty(bool, notify=notifyOnCompleteChanged)
+    def notifyOnComplete(self) -> bool:  # noqa: N802
+        return self._notify_on_complete
+
+    @notifyOnComplete.setter
+    def notifyOnComplete(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._notify_on_complete:
+            self._notify_on_complete = value
+            self.notifyOnCompleteChanged.emit()
+            self._save_personalization_config()
+
+    def set_tray_icon(self, tray: "QtWidgets.QSystemTrayIcon") -> None:
+        self._tray_icon = tray
 
     @QtCore.pyqtProperty(bool, notify=hotkeysEnabledChanged)
     def hotkeysEnabled(self) -> bool:  # noqa: N802
@@ -2409,6 +2427,9 @@ class AsrController(QtCore.QObject):
             if theme_str in ("light", "dark", "auto"):
                 self._theme = theme_str
 
+        notify_on_complete = settings.value("Personalization/notify_on_complete", self._notify_on_complete)
+        self._notify_on_complete = coerce_bool(notify_on_complete)
+
     def _save_personalization_config(self) -> None:
         settings = QtCore.QSettings(self.SETTINGS_ORG, self.SETTINGS_APP)
         settings.setValue("Personalization/start_minimized", self._start_minimized)
@@ -2420,6 +2441,7 @@ class AsrController(QtCore.QObject):
         settings.setValue("Personalization/enable_delayed_stop", self._enable_delayed_stop)
         settings.setValue("Personalization/hotwords", self._hotwords)
         settings.setValue("Personalization/theme", self._theme)
+        settings.setValue("Personalization/notify_on_complete", self._notify_on_complete)
         settings.sync()
 
     def _using_default_credentials(self) -> bool:
@@ -2534,6 +2556,35 @@ class AsrController(QtCore.QObject):
         if self._stats_timer.isActive():
             self._stats_timer.stop()
 
+    def _send_completion_notification(self, content: str, elapsed_s: float) -> None:
+        """发送识别完成通知"""
+        if not self._notify_on_complete or not self._tray_icon:
+            return
+        char_count = sum(1 for c in content if not c.isspace())
+        if char_count == 0:
+            return
+        # 生成摘要：截取最后20个字
+        text = content.strip()
+        if len(text) > 20:
+            summary = f"...{text[-20:]}"
+        else:
+            summary = text
+        # 格式化时长
+        if elapsed_s < 60:
+            duration = f"{elapsed_s:.1f}秒"
+        else:
+            mins = int(elapsed_s // 60)
+            secs = int(elapsed_s % 60)
+            duration = f"{mins}分{secs}秒"
+        title = "语音识别完成"
+        message = f"{summary}\n{char_count}字 · {duration}"
+        self._tray_icon.showMessage(
+            title,
+            message,
+            QtWidgets.QSystemTrayIcon.MessageIcon.Information,
+            3000,
+        )
+
     def _finalize_session(self, cancelled: bool = False) -> None:
         self._session_partial = ""
         if self._current_row is None:
@@ -2560,6 +2611,7 @@ class AsrController(QtCore.QObject):
             if not cancelled:
                 clipboard = QtWidgets.QApplication.clipboard()
                 clipboard.setText(content)
+                self._send_completion_notification(content, session_elapsed)
                 if (
                     self._auto_submit
                     and self._session_mode == "toggle"
@@ -4141,6 +4193,7 @@ def main() -> int:
         app.setQuitOnLastWindowClosed(False)
         tray_icon = QtWidgets.QSystemTrayIcon(_build_tray_icon(), app)
         tray_icon.setToolTip("说了么")
+        controller.set_tray_icon(tray_icon)
 
         tray_menu = QtWidgets.QMenu()
         show_action = QtGui.QAction("显示窗口", tray_menu)

@@ -827,6 +827,16 @@
                     </div>
                     <div class="hint-text">延迟收音会降低一点识别速度，但会提升部分快速操作场景下的识别效果</div>
                 </div>
+                <div class="form-group">
+                    <div class="switch-row" style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: 600;">识别完成通知</span>
+                        <label class="switch">
+                            <input id="notify-on-complete" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">识别完成后发送系统通知，显示内容摘要和时长</div>
+                </div>
                 <div class="form-group" style="margin-bottom: 0;">
                     <label>热词设置</label>
                     <div class="hint-text" style="margin-bottom: 6px;">每行一个热词，用于提高人名、品牌、术语等词汇的识别准确率</div>
@@ -993,6 +1003,7 @@
    $("enable-punc").checked = !!controller.enablePunc;
    $("enable-ddc").checked = !!controller.enableDdc;
    $("enable-delayed-stop").checked = !!controller.enableDelayedStop;
+   $("notify-on-complete").checked = !!controller.notifyOnComplete;
    $("hotwords").value = controller.hotwords || "";
 
    // 主题同步
@@ -1197,6 +1208,7 @@
    $("enable-punc").addEventListener("change", (e) => controller && (controller.enablePunc = e.target.checked));
    $("enable-ddc").addEventListener("change", (e) => controller && (controller.enableDdc = e.target.checked));
    $("enable-delayed-stop").addEventListener("change", (e) => controller && (controller.enableDelayedStop = e.target.checked));
+   $("notify-on-complete").addEventListener("change", (e) => controller && (controller.notifyOnComplete = e.target.checked));
    $("hotwords").addEventListener("input", (e) => controller && (controller.hotwords = e.target.value));
 
    // 主题切换
@@ -1291,7 +1303,8 @@
      'enablePuncChanged', 'enableDdcChanged', 'enableDelayedStopChanged', 'hotwordsChanged',
      'primaryHotkeyTextChanged', 'primaryHotkeyEnabledChanged',
      'freehandHotkeyTextChanged', 'freehandHotkeyEnabledChanged',
-     'mouseHotkeyModeChanged', 'mouseModeEnabledChanged', 'themeChanged'
+     'mouseHotkeyModeChanged', 'mouseModeEnabledChanged', 'themeChanged',
+     'notifyOnCompleteChanged'
    ];
 
    signals.forEach(sig => {
