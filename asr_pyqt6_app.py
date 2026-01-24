@@ -142,10 +142,17 @@ def _setup_frozen_qt_env() -> None:
     qt_root = os.path.join(base_dir, "PyQt6", "Qt6")
     logger.info("Qt root=%s exists=%s", qt_root, os.path.isdir(qt_root))
     if os.path.isdir(qt_root):
-        process_candidates = (
-            os.path.join(qt_root, "bin", "QtWebEngineProcess.exe"),
-            os.path.join(qt_root, "bin", "Qt6WebEngineProcess.exe"),
-        )
+        # QtWebEngineProcess paths differ by platform
+        if sys.platform.startswith("win"):
+            process_candidates = (
+                os.path.join(qt_root, "bin", "QtWebEngineProcess.exe"),
+                os.path.join(qt_root, "bin", "Qt6WebEngineProcess.exe"),
+            )
+        else:
+            process_candidates = (
+                os.path.join(qt_root, "libexec", "QtWebEngineProcess"),
+                os.path.join(qt_root, "bin", "QtWebEngineProcess"),
+            )
         for candidate in process_candidates:
             logger.info("Check QtWebEngineProcess candidate=%s exists=%s", candidate, os.path.exists(candidate))
         for candidate in process_candidates:

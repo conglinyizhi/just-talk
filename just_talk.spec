@@ -13,6 +13,19 @@ hiddenimports += collect_submodules("PyQt6.QtWebChannel")
 hiddenimports += collect_submodules("pynput")
 hiddenimports += collect_submodules("sounddevice")
 hiddenimports += ["numpy"]
+# pynput X11 backend (not always collected automatically)
+hiddenimports += [
+    "pynput.keyboard._xorg",
+    "pynput.mouse._xorg",
+    "pynput._util.xorg",
+    "Xlib",
+    "Xlib.display",
+    "Xlib.ext",
+    "Xlib.ext.xtest",
+    "Xlib.keysymdef",
+    "Xlib.keysymdef.latin1",
+    "Xlib.keysymdef.miscellany",
+]
 
 name = os.environ.get("JT_BINARY_NAME", "just-talk")
 onefile = os.environ.get("JT_ONEFILE", "1") == "1"
@@ -46,6 +59,8 @@ datas += collect_data_files(
     subdir="Qt6/bin",
     includes=["*.dll", "*.exe", "*.pak", "*.dat", "*.bin"],
 )
+# QtWebEngineProcess on Linux is in libexec
+datas += collect_data_files("PyQt6", subdir="Qt6/libexec")
 
 # 只保留中英文翻译，减少约 45MB
 datas += collect_data_files(

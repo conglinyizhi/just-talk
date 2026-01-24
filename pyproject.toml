@@ -17,3 +17,6 @@ dependencies = [
 build = [
     "pyinstaller>=6.8.0",
 ]
+
+[tool.uv]
+index-url = "https://mirrors.ustc.edu.cn/pypi/web/simple"

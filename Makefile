@@ -17,8 +17,9 @@ CHOWN_USER ?= $(shell id -u):$(shell id -g)
 APPIMAGETOOL ?= appimagetool-x86_64.AppImage
 APPIMAGETOOL_URL ?= https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage
 VERSION ?= $(shell python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")
+APPIMAGE_IMAGE ?= just-talk-linux-appimage
 
-.PHONY: sync build-linux build-appimage build-windows build-all clean-dist
+.PHONY: sync build-linux build-appimage build-appimage-local docker-appimage-image build-windows build-all clean-dist
 
 sync:
 	$(UV) sync --frozen --extra build
@@ -26,7 +27,7 @@ sync:
 build-linux: sync
 	JT_BINARY_NAME=just-talk-x86_64 JT_ONEFILE=1 $(UV) run pyinstaller just_talk.spec
 
-build-appimage: build-linux
+build-appimage-local: build-linux
 	@# Download appimagetool if not exists
 	@if [ ! -f "$(APPIMAGETOOL)" ]; then \
 		echo "Downloading appimagetool..."; \
@@ -65,6 +66,21 @@ build-appimage: build-linux
 	@# Build AppImage
 	ARCH=x86_64 ./$(APPIMAGETOOL) AppDir "dist/just-talk-$(VERSION)-x86_64.AppImage"
 	@echo "AppImage created: dist/just-talk-$(VERSION)-x86_64.AppImage"
+
+docker-appimage-image:
+	docker build -f Dockerfile.linux-appimage -t $(APPIMAGE_IMAGE) .
+
+build-appimage: docker-appimage-image
+	docker run --rm \
+		-v $(PWD):/app \
+		-w /app \
+		$(APPIMAGE_IMAGE) \
+		bash scripts/build-appimage.sh
+	@if [ "$(FIX_PERMS)" = "1" ]; then \
+		if [ -d dist ] || [ -d build ]; then \
+			$(CHOWN) -R $(CHOWN_USER) dist build AppDir; \
+		fi; \
+	fi
 
 release-linux:
 	./scripts/release-linux.sh

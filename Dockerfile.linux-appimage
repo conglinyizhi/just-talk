@@ -1,0 +1,36 @@
+# Build image for Linux AppImage (Debian 13 trixie, glibc 2.40)
+FROM python:3.13-slim-trixie
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Switch to CN mirrors first (trixie uses deb822 format)
+RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+        sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources; \
+    fi
+
+# Download and extract appimagetool (static binary, cacheable)
+RUN apt-get update && apt-get install -y --no-install-recommends wget && \
+    wget -q https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+    -O /usr/local/bin/appimagetool && \
+    chmod +x /usr/local/bin/appimagetool && \
+    cd /usr/local/bin && ./appimagetool --appimage-extract && \
+    mv squashfs-root appimagetool-extracted && \
+    ln -sf /usr/local/bin/appimagetool-extracted/AppRun /usr/local/bin/appimagetool-run && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install xfce4 for all desktop/X11/GL dependencies + build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    xfce4 \
+    file \
+    fuse \
+    libfuse2 \
+    build-essential \
+    linux-libc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install uv
+RUN pip install uv -i https://mirrors.ustc.edu.cn/pypi/web/simple
+
+WORKDIR /app
+
+CMD ["bash"]
