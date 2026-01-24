@@ -3,8 +3,9 @@ FROM python:3.13-slim-trixie
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Switch to CN mirrors first (trixie uses deb822 format)
-RUN if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
+# Switch to CN mirrors (skip in CI)
+ARG USE_CN_MIRROR=true
+RUN if [ "$USE_CN_MIRROR" = "true" ] && [ -f /etc/apt/sources.list.d/debian.sources ]; then \
         sed -i 's@deb.debian.org@mirrors.ustc.edu.cn@g' /etc/apt/sources.list.d/debian.sources; \
     fi
 
@@ -28,8 +29,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     linux-libc-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install uv
-RUN pip install uv -i https://mirrors.ustc.edu.cn/pypi/web/simple
+# Install uv (use CN mirror only if enabled)
+RUN if [ "$USE_CN_MIRROR" = "true" ]; then \
+        pip install uv -i https://mirrors.ustc.edu.cn/pypi/web/simple; \
+    else \
+        pip install uv; \
+    fi
 
 WORKDIR /app
 

@@ -37,10 +37,11 @@ jobs:
 
       - name: Build AppImage with Docker
         run: |
-          docker build -f Dockerfile.linux-appimage -t just-talk-linux-appimage .
+          docker build -f Dockerfile.linux-appimage --build-arg USE_CN_MIRROR=false -t just-talk-linux-appimage .
           docker run --rm \
             -v ${{ github.workspace }}:/app \
             -w /app \
+            -e UV_INDEX_URL=https://pypi.org/simple \
             just-talk-linux-appimage \
             bash scripts/build-appimage.sh
 
