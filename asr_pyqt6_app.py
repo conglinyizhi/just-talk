@@ -1242,6 +1242,7 @@ class AsrController(QtCore.QObject):
     themeChanged = QtCore.pyqtSignal()
     notifyOnCompleteChanged = QtCore.pyqtSignal()
     delayedStopMsChanged = QtCore.pyqtSignal()
+    removeTrailingPeriodChanged = QtCore.pyqtSignal()
 
     RESOURCE_ID_DEFAULT = "volc.seedasr.sauc.duration"
     CHUNK_MS_DEFAULT = 200
@@ -1320,6 +1321,7 @@ class AsrController(QtCore.QObject):
         self._auto_submit_worker_lock = threading.Lock()
         self._auto_submit_paste_keys = "ctrl+v"
         self._enable_punc = True
+        self._remove_trailing_period = False
         self._enable_ddc = False
         self._enable_delayed_stop = True  # 默认启用延迟收音
         self._hotwords = ""
@@ -1528,6 +1530,18 @@ class AsrController(QtCore.QObject):
         if value != self._enable_punc:
             self._enable_punc = value
             self.enablePuncChanged.emit()
+            self._save_personalization_config()
+
+    @QtCore.pyqtProperty(bool, notify=removeTrailingPeriodChanged)
+    def removeTrailingPeriod(self) -> bool:  # noqa: N802
+        return self._remove_trailing_period
+
+    @removeTrailingPeriod.setter
+    def removeTrailingPeriod(self, value: bool) -> None:
+        value = bool(value)
+        if value != self._remove_trailing_period:
+            self._remove_trailing_period = value
+            self.removeTrailingPeriodChanged.emit()
             self._save_personalization_config()
 
     @QtCore.pyqtProperty(bool, notify=enableDdcChanged)
@@ -2407,6 +2421,7 @@ class AsrController(QtCore.QObject):
             self._auto_submit_paste_keys,
         )
         enable_punc = settings.value("Personalization/enable_punc", self._enable_punc)
+        remove_trailing_period = settings.value("Personalization/remove_trailing_period", self._remove_trailing_period)
         enable_ddc = settings.value("Personalization/enable_ddc", self._enable_ddc)
         enable_delayed_stop = settings.value("Personalization/enable_delayed_stop", self._enable_delayed_stop)
         delayed_stop_ms = settings.value("Personalization/delayed_stop_ms", self._delayed_stop_ms)
@@ -2430,6 +2445,7 @@ class AsrController(QtCore.QObject):
             if value:
                 self._auto_submit_paste_keys = value
         self._enable_punc = coerce_bool(enable_punc)
+        self._remove_trailing_period = coerce_bool(remove_trailing_period)
         self._enable_ddc = coerce_bool(enable_ddc)
         self._enable_delayed_stop = coerce_bool(enable_delayed_stop)
         if delayed_stop_ms is not None:
@@ -2456,6 +2472,7 @@ class AsrController(QtCore.QObject):
         settings.setValue("Personalization/auto_submit_mode", self._auto_submit_mode)
         settings.setValue("Personalization/auto_submit_paste_keys", self._auto_submit_paste_keys)
         settings.setValue("Personalization/enable_punc", self._enable_punc)
+        settings.setValue("Personalization/remove_trailing_period", self._remove_trailing_period)
         settings.setValue("Personalization/enable_ddc", self._enable_ddc)
         settings.setValue("Personalization/enable_delayed_stop", self._enable_delayed_stop)
         settings.setValue("Personalization/delayed_stop_ms", self._delayed_stop_ms)
@@ -2688,6 +2705,10 @@ class AsrController(QtCore.QObject):
         text = text.strip()
         if not text:
             return
+        # 删除句尾句号（仅在启用标点且开启此选项时）
+        if self._enable_punc and self._remove_trailing_period:
+            if text.endswith("。") or text.endswith("."):
+                text = text[:-1]
         if self._committed_text:
             self._committed_text = self._committed_text.rstrip() + "\n" + text
         else:

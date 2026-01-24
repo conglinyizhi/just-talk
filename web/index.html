@@ -839,6 +839,16 @@
                 </div>
                 <div class="form-group">
                     <div class="switch-row" style="margin-bottom: 8px;">
+                        <span style="font-size: 13px; font-weight: 600;">删除句尾句号</span>
+                        <label class="switch">
+                            <input id="remove-trailing-period" type="checkbox">
+                            <span class="slider"><span class="slider-knob"></span></span>
+                        </label>
+                    </div>
+                    <div class="hint-text">自动删除识别结果末尾的句号</div>
+                </div>
+                <div class="form-group">
+                    <div class="switch-row" style="margin-bottom: 8px;">
                         <span style="font-size: 13px; font-weight: 600;">启用语义顺滑</span>
                         <label class="switch">
                             <input id="enable-ddc" type="checkbox">
@@ -1035,6 +1045,8 @@
    syncAutoSubmitModeOptions();
    syncAutoSubmitAdvancedToggle();
    $("enable-punc").checked = !!controller.enablePunc;
+   $("remove-trailing-period").checked = !!controller.removeTrailingPeriod;
+   $("remove-trailing-period").disabled = !controller.enablePunc;
    $("enable-ddc").checked = !!controller.enableDdc;
    $("enable-delayed-stop").checked = !!controller.enableDelayedStop;
    $("delayed-stop-ms").value = controller.delayedStopMs || 150;
@@ -1242,7 +1254,11 @@
      const panel = $("auto-submit-advanced-panel");
      if (panel) panel.style.display = "none";
    });
-   $("enable-punc").addEventListener("change", (e) => controller && (controller.enablePunc = e.target.checked));
+   $("enable-punc").addEventListener("change", (e) => {
+     if (controller) controller.enablePunc = e.target.checked;
+     $("remove-trailing-period").disabled = !e.target.checked;
+   });
+   $("remove-trailing-period").addEventListener("change", (e) => controller && (controller.removeTrailingPeriod = e.target.checked));
    $("enable-ddc").addEventListener("change", (e) => controller && (controller.enableDdc = e.target.checked));
    $("enable-delayed-stop").addEventListener("change", (e) => {
      if (controller) controller.enableDelayedStop = e.target.checked;
@@ -1348,7 +1364,7 @@
      'primaryHotkeyTextChanged', 'primaryHotkeyEnabledChanged',
      'freehandHotkeyTextChanged', 'freehandHotkeyEnabledChanged',
      'mouseHotkeyModeChanged', 'mouseModeEnabledChanged', 'themeChanged',
-     'notifyOnCompleteChanged', 'delayedStopMsChanged'
+     'notifyOnCompleteChanged', 'delayedStopMsChanged', 'removeTrailingPeriodChanged'
    ];
 
    signals.forEach(sig => {
